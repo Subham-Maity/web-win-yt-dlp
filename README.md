@@ -1,4 +1,6 @@
 # yt-dlp Web Downloader ⬇️
+<img width="1896" height="876" alt="image" src="https://github.com/user-attachments/assets/3dd4176a-7b3d-42b0-af4c-01788c81dfce" />
+
 
 A lightweight, modern web-based user interface for downloading videos from YouTube, Instagram, and other websites using `yt-dlp`. 
 
