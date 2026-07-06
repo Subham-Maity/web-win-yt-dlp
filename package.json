@@ -1,0 +1,12 @@
+{
+  "name": "yt-dlp-web",
+  "version": "1.0.0",
+  "description": "Lightweight yt-dlp web downloader",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

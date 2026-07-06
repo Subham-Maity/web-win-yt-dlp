@@ -1,0 +1,1 @@
+yt-dlp --js-runtimes "node:C:\Program Files\nodejs\node.exe" --cookies cookies.txt https://www.instagram.com/p/xxxxx

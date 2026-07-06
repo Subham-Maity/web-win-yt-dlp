@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>yt-dlp Web Downloader</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0f14;
+      --surface:   #161921;
+      --surface2:  #1e2230;
+      --border:    #2a2f3e;
+      --accent:    #6c63ff;
+      --accent2:   #a78bfa;
+      --green:     #22c55e;
+      --red:       #ef4444;
+      --yellow:    #f59e0b;
+      --text:      #e2e8f0;
+      --muted:     #64748b;
+      --radius:    14px;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #1a1040 0%, #0d1528 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(12px);
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo-icon {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    .logo h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; }
+    .logo span { color: var(--accent2); }
+
+    .header-status {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.8rem; color: var(--muted);
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Main ── */
+    main { flex: 1; padding: 32px; max-width: 860px; margin: 0 auto; width: 100%; }
+
+    /* ── Input Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .card-title {
+      font-size: 0.75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--muted); margin-bottom: 16px;
+    }
+
+    .url-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+
+    .url-row {
+      display: flex; gap: 8px; align-items: center;
+      animation: slideIn 0.2s ease;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .url-input {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px 14px;
+      color: var(--text);
+      font-size: 0.88rem;
+      font-family: inherit;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      outline: none;
+    }
+    .url-input::placeholder { color: var(--muted); }
+    .url-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(108,99,255,0.15);
+    }
+
+    .btn-icon {
+      width: 38px; height: 38px; border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--muted);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      transition: all 0.15s;
+    }
+    .btn-icon:hover { color: var(--red); border-color: var(--red); background: rgba(239,68,68,0.08); }
+
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 18px; border-radius: 8px;
+      font-size: 0.88rem; font-weight: 600;
+      cursor: pointer; border: none;
+      transition: all 0.15s; white-space: nowrap;
+    }
+    .btn-add {
+      background: var(--surface2); color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-add:hover { border-color: var(--accent); color: var(--accent); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #8b5cf6);
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(108,99,255,0.35);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(108,99,255,0.5); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+
+    /* ── Info bar ── */
+    .info-bar {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(108,99,255,0.08);
+      border: 1px solid rgba(108,99,255,0.2);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.8rem; color: var(--muted);
+      margin-bottom: 24px;
+    }
+    .info-bar strong { color: var(--accent2); }
+    .info-bar .folder-btn {
+      margin-left: auto; background: none; border: none;
+      color: var(--accent); cursor: pointer; font-size: 0.8rem;
+      text-decoration: underline; padding: 0;
+    }
+
+    /* ── Queue ── */
+    .queue-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .queue-title { font-size: 0.9rem; font-weight: 600; }
+    .queue-count {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 2px 10px;
+      font-size: 0.75rem; color: var(--muted);
+    }
+
+    .job-list { display: flex; flex-direction: column; gap: 10px; }
+
+    .job-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      animation: slideIn 0.25s ease;
+      transition: border-color 0.2s;
+    }
+    .job-card.done   { border-left: 3px solid var(--green); }
+    .job-card.error  { border-left: 3px solid var(--red); }
+    .job-card.cancelled { border-left: 3px solid var(--muted); }
+    .job-card.downloading { border-left: 3px solid var(--accent); }
+
+    .job-top { display: flex; align-items: flex-start; gap: 10px; }
+    .job-icon { font-size: 16px; margin-top: 1px; flex-shrink: 0; }
+    .job-info { flex: 1; min-width: 0; }
+    .job-title {
+      font-size: 0.85rem; font-weight: 500;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-bottom: 2px;
+    }
+    .job-url {
+      font-size: 0.72rem; color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .job-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .job-cancel {
+      width: 28px; height: 28px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--surface2);
+      color: var(--muted); cursor: pointer; font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+    }
+    .job-cancel:hover { color: var(--red); border-color: var(--red); }
+
+    .job-status-row {
+      display: flex; align-items: center; gap: 10px; margin-top: 10px;
+    }
+    .progress-bar-wrap {
+      flex: 1; height: 5px; background: var(--surface2);
+      border-radius: 99px; overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 99px;
+      transition: width 0.4s ease;
+    }
+    .job-pct {
+      font-size: 0.72rem; color: var(--muted);
+      min-width: 38px; text-align: right;
+    }
+    .badge {
+      font-size: 0.68rem; font-weight: 600; letter-spacing: 0.05em;
+      padding: 2px 8px; border-radius: 99px;
+      text-transform: uppercase;
+    }
+    .badge-done       { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge-error      { background: rgba(239,68,68,0.15); color: var(--red); }
+    .badge-cancelled  { background: rgba(100,116,139,0.15); color: var(--muted); }
+    .badge-queued     { background: rgba(245,158,11,0.15); color: var(--yellow); }
+    .badge-downloading{ background: rgba(108,99,255,0.15); color: var(--accent2); }
+
+    .empty-state {
+      text-align: center; padding: 48px 0; color: var(--muted);
+    }
+    .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+    .empty-state p { font-size: 0.88rem; }
+
+    /* ── Paste multi hint ── */
+    .paste-hint { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed; bottom: 24px; right: 24px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 18px;
+      font-size: 0.85rem; color: var(--text);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+      transform: translateY(80px); opacity: 0;
+      transition: all 0.3s cubic-bezier(.34,1.56,.64,1);
+      z-index: 100;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">⬇</div>
+    <h1>yt-dlp <span>Web</span></h1>
+  </div>
+  <div class="header-status">
+    <div class="status-dot"></div>
+    <span id="hdrStatus">Server ready</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- Info bar -->
+  <div class="info-bar" id="infoBar">
+    <span>📁 Saving to: <strong id="dlDir">…</strong></span>
+    <button class="folder-btn" onclick="openFolder()">Open Folder ↗</button>
+  </div>
+
+  <!-- URL input card -->
+  <div class="card">
+    <div class="card-title">Add Video URLs</div>
+    <div class="url-list" id="urlList"></div>
+    <p class="paste-hint">💡 Tip: paste multiple URLs separated by newlines or spaces — they'll split automatically</p>
+    <div class="actions" style="margin-top:16px">
+      <button class="btn btn-add" id="btnAdd" onclick="addRow()">＋ Add URL</button>
+      <button class="btn btn-primary" id="btnDownload" onclick="startDownload()">⬇ Download All</button>
+      <button class="btn btn-ghost" onclick="clearDone()">🗑 Clear Done</button>
+    </div>
+  </div>
+
+  <!-- Queue -->
+  <div>
+    <div class="queue-header">
+      <span class="queue-title">Download Queue</span>
+      <span class="queue-count" id="queueCount">0 items</span>
+    </div>
+    <div class="job-list" id="jobList">
+      <div class="empty-state" id="emptyState">
+        <div class="icon">📭</div>
+        <p>No downloads yet. Add some URLs above and hit Download!</p>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  const jobData = {}; // id -> { url, status, progress, title, error }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  fetchInfo();
+  addRow(); // start with one input
+  connectSSE();
+
+  async function fetchInfo() {
+    try {
+      const r = await fetch('/info');
+      const d = await r.json();
+      document.getElementById('dlDir').textContent = d.downloadDir;
+      if (!d.ytdlpExists) toast('⚠️ yt-dlp.exe not found in server folder!', 5000);
+      if (!d.cookiesExist) toast('ℹ️ No cookies.txt found — some sites may fail', 4000);
+    } catch(e) {}
+  }
+
+  // ── SSE ────────────────────────────────────────────────────────────────────
+  function connectSSE() {
+    const es = new EventSource('/events');
+    es.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'snapshot') {
+        for (const j of msg.jobs) handleJob(j);
+      } else if (msg.type === 'job') {
+        handleJob(msg);
+      } else if (msg.type === 'progress') {
+        updateProgress(msg.id, msg.progress, msg.title);
+      } else if (msg.type === 'cleared') {
+        // remove done/error/cancelled from DOM
+        for (const id in jobData) {
+          if (['done','error','cancelled'].includes(jobData[id].status)) {
+            delete jobData[id];
+            const el = document.getElementById('job-' + id);
+            if (el) el.remove();
+          }
+        }
+        renderEmpty();
+        updateCount();
+      }
+    };
+    es.onerror = () => {
+      document.getElementById('hdrStatus').textContent = 'Reconnecting…';
+      setTimeout(connectSSE, 3000);
+      es.close();
+    };
+    es.onopen = () => {
+      document.getElementById('hdrStatus').textContent = 'Server ready';
+    };
+  }
+
+  function handleJob(j) {
+    jobData[j.id] = { url: j.url, status: j.status, progress: j.progress || 0, title: j.title || '', error: j.error || '' };
+    upsertJobCard(j.id);
+    updateCount();
+  }
+
+  function updateProgress(id, pct, title) {
+    if (!jobData[id]) return;
+    jobData[id].progress = pct;
+    if (title) jobData[id].title = title;
+    const fill = document.getElementById('fill-' + id);
+    const pctEl = document.getElementById('pct-' + id);
+    const titleEl = document.getElementById('title-' + id);
+    if (fill) fill.style.width = pct + '%';
+    if (pctEl) pctEl.textContent = pct.toFixed(0) + '%';
+    if (titleEl && title) titleEl.textContent = title;
+  }
+
+  // ── Render job card ─────────────────────────────────────────────────────────
+  function upsertJobCard(id) {
+    const j = jobData[id];
+    const existing = document.getElementById('job-' + id);
+
+    // Status icon & badge
+    const icons = { done: '✅', error: '❌', cancelled: '⛔', downloading: '⬇️', queued: '🕐' };
+    const icon = icons[j.status] || '⬇️';
+    const displayTitle = j.title || j.url;
+    const isActive = j.status === 'downloading' || j.status === 'queued';
+
+    if (existing) {
+      // Update fields in-place
+      const statusEl = existing.querySelector('.job-status-area');
+      if (statusEl) statusEl.innerHTML = renderStatusArea(id, j);
+      existing.className = 'job-card ' + j.status;
+      const iconEl = existing.querySelector('.job-icon');
+      if (iconEl) iconEl.textContent = icon;
+      const cancelBtn = existing.querySelector('.job-cancel');
+      if (cancelBtn) cancelBtn.style.display = isActive ? 'flex' : 'none';
+      const titleEl = document.getElementById('title-' + id);
+      if (titleEl) titleEl.textContent = displayTitle;
+    } else {
+      const card = document.createElement('div');
+      card.className = 'job-card ' + j.status;
+      card.id = 'job-' + id;
+      card.innerHTML = `
+        <div class="job-top">
+          <div class="job-icon">${icon}</div>
+          <div class="job-info">
+            <div class="job-title" id="title-${id}">${escHtml(displayTitle)}</div>
+            <div class="job-url">${escHtml(j.url)}</div>
+          </div>
+          <div class="job-actions">
+            <button class="job-cancel" id="cancel-${id}" title="Cancel"
+              style="display:${isActive ? 'flex' : 'none'}"
+              onclick="cancelJob('${id}')">✕</button>
+          </div>
+        </div>
+        <div class="job-status-area">${renderStatusArea(id, j)}</div>
+      `;
+      document.getElementById('jobList').prepend(card);
+      document.getElementById('emptyState')?.remove();
+    }
+  }
+
+  function renderStatusArea(id, j) {
+    if (j.status === 'done') {
+      return `<div style="margin-top:8px"><span class="badge badge-done">✓ Complete</span></div>`;
+    }
+    if (j.status === 'error') {
+      return `<div style="margin-top:8px"><span class="badge badge-error">✕ Error</span> <small style="color:var(--muted);font-size:0.72rem">${escHtml(j.error)}</small></div>`;
+    }
+    if (j.status === 'cancelled') {
+      return `<div style="margin-top:8px"><span class="badge badge-cancelled">Cancelled</span></div>`;
+    }
+    if (j.status === 'queued') {
+      return `<div style="margin-top:8px"><span class="badge badge-queued">Queued</span></div>`;
+    }
+    // downloading
+    return `
+      <div class="job-status-row" style="margin-top:10px">
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" id="fill-${id}" style="width:${j.progress}%"></div>
+        </div>
+        <div class="job-pct" id="pct-${id}">${(j.progress || 0).toFixed(0)}%</div>
+      </div>
+      <div style="margin-top:6px"><span class="badge badge-downloading">Downloading</span></div>
+    `;
+  }
+
+  function renderEmpty() {
+    if (!document.getElementById('emptyState') && document.getElementById('jobList').children.length === 0) {
+      const el = document.createElement('div');
+      el.className = 'empty-state';
+      el.id = 'emptyState';
+      el.innerHTML = '<div class="icon">📭</div><p>No downloads yet. Add some URLs above and hit Download!</p>';
+      document.getElementById('jobList').appendChild(el);
+    }
+  }
+
+  // ── URL row management ─────────────────────────────────────────────────────
+  function addRow(value = '') {
+    const list = document.getElementById('urlList');
+    const row = document.createElement('div');
+    row.className = 'url-row';
+    row.innerHTML = `
+      <input class="url-input" type="url" placeholder="https://youtube.com/watch?v=…" value="${escHtml(value)}"
+        oninput="handlePaste(this)" onkeydown="handleKey(event,this)" />
+      <button class="btn-icon" title="Remove" onclick="removeRow(this)">✕</button>
+    `;
+    list.appendChild(row);
+    const inp = row.querySelector('input');
+    inp.focus();
+    return inp;
+  }
+
+  function removeRow(btn) {
+    const list = document.getElementById('urlList');
+    btn.closest('.url-row').remove();
+    if (list.children.length === 0) addRow();
+  }
+
+  function handleKey(e, inp) {
+    if (e.key === 'Enter') { e.preventDefault(); addRow(); }
+  }
+
+  function handlePaste(inp) {
+    // Split by newline/space and create multiple rows
+    const val = inp.value;
+    const urls = val.split(/[\n\r\s]+/).map(s => s.trim()).filter(s => s.startsWith('http'));
+    if (urls.length > 1) {
+      inp.value = urls[0];
+      for (let i = 1; i < urls.length; i++) addRow(urls[i]);
+    }
+  }
+
+  function getUrls() {
+    return [...document.querySelectorAll('.url-input')]
+      .map(i => i.value.trim())
+      .filter(Boolean);
+  }
+
+  // ── Download ────────────────────────────────────────────────────────────────
+  async function startDownload() {
+    const urls = getUrls();
+    if (!urls.length) { toast('⚠️ Please add at least one URL'); return; }
+
+    const btn = document.getElementById('btnDownload');
+    btn.disabled = true;
+    btn.textContent = '⏳ Starting…';
+
+    try {
+      const r = await fetch('/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls })
+      });
+      const d = await r.json();
+      toast(`🚀 Started ${d.started.length} download${d.started.length !== 1 ? 's' : ''}!`);
+      // Clear inputs
+      document.getElementById('urlList').innerHTML = '';
+      addRow();
+    } catch (e) {
+      toast('❌ Server error: ' + e.message, 4000);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '⬇ Download All';
+    }
+  }
+
+  async function cancelJob(id) {
+    await fetch('/cancel/' + id, { method: 'POST' });
+  }
+
+  async function clearDone() {
+    await fetch('/clear', { method: 'POST' });
+  }
+
+  async function openFolder() {
+    await fetch('/open-folder');
+  }
+
+  function updateCount() {
+    const total = Object.keys(jobData).length;
+    document.getElementById('queueCount').textContent = `${total} item${total !== 1 ? 's' : ''}`;
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  let toastTimer;
+  function toast(msg, dur = 3000) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), dur);
+  }
+</script>
+</body>
+</html>

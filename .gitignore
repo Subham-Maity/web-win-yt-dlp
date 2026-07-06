@@ -1,0 +1,16 @@
+# Node.js dependencies
+node_modules/
+
+# Cookies & temporary cookie files (contains sensitive session info)
+cookies.txt
+ytdlp_cookies_*.txt
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
