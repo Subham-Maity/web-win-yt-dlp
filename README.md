@@ -1,114 +1,147 @@
-# yt-dlp Web Downloader ⬇️
+# yt-dlp + BullMQ Pro Downloader ⬇️
 <img width="1896" height="876" alt="image" src="https://github.com/user-attachments/assets/3dd4176a-7b3d-42b0-af4c-01788c81dfce" />
 
+A high-performance, modern web downloader user interface for downloading videos and media from YouTube, Instagram, TikTok, and other platforms using `yt-dlp`, `gallery-dl`, and a robust **BullMQ (Redis)** job queue.
 
-A lightweight, modern web-based user interface for downloading videos from YouTube, Instagram, and other websites using `yt-dlp`. 
+Now features a dedicated **Instagram Profile Media Downloader** that can scrape and download all **Photos, Reels, and Video Posts** from any Instagram profile till the end!
 
-This downloader includes support for cookies to bypass bot detection, a convenient Windows startup script, and a beautiful queue manager dashboard.
+---
+
+## ✨ Features
+
+- **BullMQ Distributed Queue (Docker Redis)**: Powered by Redis for reliable job processing, concurrency control, and live status tracking.
+- **📸 Instagram Profile Media Downloader (New & Enhanced)**:
+  - Input any Instagram profile URL or `@username` (e.g., `https://www.instagram.com/cristiano/` or `@natgeo`).
+  - **Photos + Videos Support**: Scrapes and downloads all photos, carousels, Reels, and video posts till completion.
+  - **Download Target Scope**:
+    - `📸 + 🎬 All Media (Photos + Videos + Reels)` *(Default)*
+    - `🎬 Videos & Reels Only`
+    - `📸 Photos & Images Only`
+  - Files are neatly organized into `Downloads/yt-dlp/Instagram/<username>/`.
+  - **Auto-Detection**: Pasting an Instagram profile URL into the Standard Downloader automatically detects and routes it to the Profile Worker.
+- **🔑 Connect Instagram Session Modal**:
+  - Live session detection (`🟢 Instagram Session Active` with User ID & cookie count).
+  - **1-Click Browser Popup**: Opens Instagram directly in Chrome for seamless login.
+  - **Quick Sync & Upload**: 1-click clipboard paste (`📋 Paste & Sync`), multi-line paste for Netscape / Cookie-Editor JSON, and `📁 Upload File` for `cookies.txt`.
+- **Standard Video Downloader**:
+  - Download individual videos or multiple URLs in bulk from YouTube, Instagram Reels, TikTok, X (Twitter), Facebook, and 1,000+ supported sites.
+  - Multi-URL paste detection (splits pasted lines or spaces automatically).
+- **Real-Time SSE Dashboard**: Live progress bars, speed, titles, and item completion tickers.
+- **One-Click Startup (`run.bat`)**: Automatically checks and starts Docker Redis, installs dependencies, and launches the browser UI at `http://localhost:3456`.
 
 ---
 
 ## 🚀 Quick Start Guide (Windows)
 
-Follow these step-by-step instructions to get the downloader up and running on your system.
-
-### Step 1: Install Node.js & npm
-Node.js and npm (Node Package Manager) are required to run the web server.
-
-1. **Download Node.js:**
-   - Go to the official Node.js website: [nodejs.org](https://nodejs.org)
-   - Download the **LTS (Long Term Support)** installer for Windows (recommended for most users).
-
-2. **Run the Installer:**
-   - Double-click the downloaded `.msi` file.
-   - Click **Next** through the setup wizard.
-   - **Crucial:** When you reach the **Custom Setup** screen, ensure that **"Add to PATH"** is selected (it is checked by default). This allows Node.js to be run from command lines and batch scripts.
-   - Click **Install** and then **Finish**.
-
-3. **Verify the Installation:**
-   - Open **Command Prompt** (press `Win + R`, type `cmd`, and press Enter) or **PowerShell**.
-   - Run the following command to check if Node.js is installed:
-     ```bash
-     node -v
-     ```
-   - Run the following command to check if npm is installed:
-     ```bash
-     npm -v
-     ```
-   - If both commands return version numbers (e.g., `v18.x.x` or `v20.x.x`), you are ready to proceed!
+### Step 1: Prerequisites
+1. **Node.js (LTS)**:
+   - Download and install from [nodejs.org](https://nodejs.org).
+   - Ensure **"Add to PATH"** is selected during installation.
+2. **Docker Desktop (For BullMQ Redis Queue)**:
+   - Make sure **Docker Desktop** is installed and running on your system.
+   - The launcher script will automatically start the lightweight `ytdlp-redis` container via Docker Compose.
+3. **Python (Optional Fallback)**:
+   - `gallery-dl.exe` is bundled for fast, standalone profile downloading. Python + `instaloader` is available as a secondary fallback.
 
 ---
 
-### Step 2: Set Up Cookies (Required for YouTube & Instagram)
-To bypass website bot-detection mechanisms (like YouTube's bot block or Instagram's sign-in walls), the downloader needs to load session cookies from your browser.
+### Step 2: Set Up Cookies (Instagram & YouTube Authentication)
 
-1. **Install Cookie Extension:**
-   - Install the safe and private Chrome Web Store extension: **[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc?hl=en)**.
-   - *Note: This extension runs entirely locally in your browser and does not share your data with external servers.*
+To bypass bot detection walls (like YouTube's bot block or Instagram's Error 429 login requirements):
 
-2. **Export Your Cookies:**
-   - Open your browser and navigate to the website you want to download from (e.g., [youtube.com](https://www.youtube.com) or [instagram.com](https://www.instagram.com)).
-   - **Make sure you are logged in to your account.**
-   - Click on the **Get cookies.txt LOCALLY** extension icon in your browser's toolbar.
-   - Click the **Export** button to download the cookie file. It will export your cookies in the standard Netscape format.
+#### 1-Click Interactive Modal (Recommended)
+1. Open the Web UI at `http://localhost:3456`.
+2. Click the **📸 Instagram Profile Downloader** tab.
+3. Click **`🔑 Login Popup / Sync`**.
+4. Check your status banner:
+   - If connected: `🟢 Instagram Session Active` will show your User ID.
+   - If not connected: Click **`🚀 1. Open Instagram Window`** to log in, export cookies from **Cookie-Editor**, and click **`📋 2. Paste & Sync`** (or upload your `cookies.txt`).
 
-3. **Place cookies.txt in the Project Folder:**
-   - Find the exported file (it might be named something like `youtube.com_cookies.txt` or `cookies.txt`).
-   - **Rename** it to exactly `cookies.txt`.
-   - Move or copy this file into the root of this project folder:
-     `C:\Github\yt dlp\cookies.txt`
+#### Manual `cookies.txt` Export
+1. Use the Chrome extension **Cookie-Editor** or **Get cookies.txt LOCALLY**.
+2. Export your cookies in Netscape format.
+3. Save as `cookies.txt` in the project root:
+   ```text
+   C:\Github\yt dlp\cookies.txt
+   ```
 
 ---
 
 ### Step 3: Run the Downloader
-You do not need to manually install dependencies or type commands to start the server!
 
-1. Open the project folder `C:\Github\yt dlp` in Windows Explorer.
-2. Double-click the **`run.bat`** file.
-3. **What happens on launch:**
-   - The batch script automatically checks if Node.js is installed.
-   - **On the first launch**, it will automatically download and install the required dependencies (such as Express) via `npm install`.
-   - It will start the server and automatically launch your default web browser to the Web UI at **`http://localhost:3456`**.
-4. **Keep the Command Prompt window open** while downloading. The console will display active progress logs.
+You do not need to manually configure Docker, install packages, or run manual commands:
 
----
-
-## 📺 How to Download Videos
-
-1. **Open the Web UI:**
-   - Go to `http://localhost:3456` in your browser (opened automatically by `run.bat`).
-2. **Add URLs:**
-   - Paste the link of the video you want to download in the input box.
-   - To download multiple videos, click **`＋ Add URL`** or simply paste multiple links (separated by newlines or spaces) directly into a single box. They will automatically split into individual fields.
-3. **Download:**
-   - Click **`⬇ Download All`**.
-   - You will see the download progress bars update in real time in the **Download Queue**.
-4. **Locate Downloaded Files:**
-   - By default, files are saved to your system's download directory under a folder called `yt-dlp`:
-     `C:\Users\<YourUsername>\Downloads\yt-dlp`
-   - You can quickly open this folder by clicking the **`Open Folder ↗`** link at the top of the Web UI page.
+1. Open the project folder `C:\Github\yt dlp`.
+2. Double-click **`run.bat`**.
+3. **What `run.bat` does automatically:**
+   - [1/4] Verifies Docker and launches the Redis container (`docker compose up -d`).
+   - [2/4] Installs required npm packages (`express`, `bullmq`, `ioredis`) if missing.
+   - [3/4] Verifies scraper binaries and dependencies.
+   - [4/4] Launches the server and automatically opens `http://localhost:3456` in your default browser.
 
 ---
 
-## ⏹ Stopping the Downloader
+## 📺 How to Use the Web UI
 
-- To stop the web server, simply go to the Command Prompt window opened by `run.bat`, press **`Ctrl + C`**, and type `Y` to confirm. Or simply close the Command Prompt window.
+### 1. Standard Video Downloader Tab
+1. Open `http://localhost:3456`.
+2. In the **🎬 Standard Downloader** tab, paste one or more video URLs (YouTube, Reels, TikTok, etc.).
+3. Click **`⬇ Download Queue`**.
+4. Track live download progress and file titles in the BullMQ queue below.
+
+### 2. Instagram Profile Downloader Tab
+1. Switch to the **📸 Instagram Profile Downloader** tab.
+2. Enter the target Instagram profile URL or handle (e.g. `https://www.instagram.com/cristiano/` or `@natgeo`).
+3. Choose your **Download Target Scope**:
+   - `📸 + 🎬 All Media (Photos + Videos + Reels)`
+   - `🎬 Videos & Reels Only`
+   - `📸 Photos & Images Only`
+4. Select your **Cookie Source** (`cookies.txt` or browser).
+5. Click **`⚡ Fetch & Download Profile Media Till End`**.
+6. Files will be saved into:
+   ```text
+   C:\Users\<YourUsername>\Downloads\yt-dlp\Instagram\<username>\
+   ```
+
+---
+
+## 📁 Download Directory
+
+Files are saved by default to your user Downloads folder:
+- **General Videos**: `C:\Users\<YourUsername>\Downloads\yt-dlp\`
+- **Instagram Profiles**: `C:\Users\<YourUsername>\Downloads\yt-dlp\Instagram\<username>\`
+
+Click **`Open Downloads ↗`** in the top bar of the Web UI to open this folder immediately in Windows Explorer.
 
 ---
 
 ## 📁 Project Structure
 
-```
+```text
 C:\Github\yt dlp\
-├── public/                 # Web UI frontend (HTML/CSS/JS)
-├── node_modules/           # Node.js dependencies (installed automatically)
-├── server.js               # Node.js backend server
-├── yt-dlp.exe              # The core downloader executable
-├── cookies.txt             # Exported cookies file (Add your own)
-├── run.bat                 # Click to automatically install dependencies and run
-├── bulk.txt                # CLI utility URLs list
+├── public/                 # Web UI frontend (HTML/CSS/JS with tabs, modal & badges)
+│   └── index.html
+├── docker-compose.yml      # Docker Compose configuration for Redis container
+├── queue.js                # BullMQ queue & Redis client configuration
+├── instagramService.js     # Instagram profile media scraper (gallery-dl & instaloader)
+├── instagramAuthService.js # Instagram session verification, cookie merging & modal API
+├── server.js               # Express API server with BullMQ Worker, auto-routing & SSE
+├── yt-dlp.exe              # yt-dlp binary for individual media downloads
+├── gallery-dl.exe          # gallery-dl binary for Instagram profiles & photo galleries
+├── cookies.txt             # User cookies file (ignored by git for security)
+├── run.bat                 # One-click Windows startup script
+├── bulk.txt                # CLI URLs list
 ├── bulk_download.bat       # CLI utility for bulk downloads
-└── readme.md               # This documentation
+└── README.md               # Documentation
 ```
 
-Enjoy downloading! 🎥
+---
+
+## ⏹ Stopping the Downloader
+
+- To stop the server, go to the Command Prompt window opened by `run.bat` and press **`Ctrl + C`**, or close the terminal window.
+- To stop the Redis Docker container when not in use:
+  ```bash
+  docker compose down
+  ```
+

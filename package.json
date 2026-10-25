@@ -7,6 +7,8 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "bullmq": "^6.4.1",
+    "express": "^4.18.2",
+    "ioredis": "^6.0.0"
   }
 }

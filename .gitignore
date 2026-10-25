@@ -4,6 +4,11 @@ node_modules/
 # Cookies & temporary cookie files (contains sensitive session info)
 cookies.txt
 ytdlp_cookies_*.txt
+ytdlp_ig_cookies_*.txt
+
+# Download directories / media artifacts
+subham_xam/
+downloads/
 
 # Logs
 npm-debug.log*
@@ -14,3 +19,4 @@ pnpm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+
