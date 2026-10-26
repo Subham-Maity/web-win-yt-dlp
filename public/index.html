@@ -1415,6 +1415,17 @@
     if (title) jobData[id].title = title;
     if (log) jobData[id].log = log;
 
+    // Ensure downloading state markup (progress bar) exists in DOM
+    const card = document.getElementById('job-' + id);
+    if (card && (wasQueued || !document.getElementById('fill-' + id))) {
+      const isIg = jobData[id].type === 'instagram_profile';
+      card.className = `job-card ${isIg ? 'ig-job ' : ''}downloading`;
+      const statusArea = card.querySelector('.job-status-area');
+      if (statusArea) statusArea.innerHTML = renderStatusArea(id, jobData[id]);
+      const iconEl = card.querySelector('.job-icon');
+      if (iconEl) iconEl.textContent = isIg ? '📸' : '⬇️';
+    }
+
     // Update DOM elements in place
     const fill = document.getElementById('fill-' + id);
     const pctEl = document.getElementById('pct-' + id);
@@ -1425,17 +1436,6 @@
     if (pctEl) pctEl.textContent = jobData[id].progress.toFixed(0) + '%';
     if (titleEl && title) titleEl.textContent = title;
     if (logEl && log) logEl.textContent = log;
-
-    // If status changed from queued to downloading, re-render the status badge
-    if (wasQueued && jobData[id].status === 'downloading') {
-      const card = document.getElementById('job-' + id);
-      if (card) {
-        const isIg = jobData[id].type === 'instagram_profile';
-        card.className = `job-card ${isIg ? 'ig-job ' : ''}downloading`;
-        const statusArea = card.querySelector('.job-status-area');
-        if (statusArea) statusArea.innerHTML = renderStatusArea(id, jobData[id]);
-      }
-    }
   }
 
   // ── Upsert Job Card in DOM ──────────────────────────────────────────────────

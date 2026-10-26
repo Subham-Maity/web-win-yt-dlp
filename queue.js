@@ -8,20 +8,22 @@ const redisConnection = new Redis({
   host: REDIS_HOST,
   port: REDIS_PORT,
   maxRetriesPerRequest: null,
-  enableReadyCheck: false,
+  enableReadyCheck: true,
+  connectTimeout: 2000,
+  commandTimeout: 2000,
   retryStrategy(times) {
-    // Retry connection every 2 seconds
-    return Math.min(times * 200, 2000);
+    // Retry connection every 3 seconds
+    return Math.min(times * 300, 3000);
   }
 });
 
 let isRedisConnected = false;
 let loggedRedisError = false;
 
-redisConnection.on('connect', () => {
+redisConnection.on('ready', () => {
   isRedisConnected = true;
   loggedRedisError = false;
-  console.log('  📦 BullMQ: Connected to Redis on ' + REDIS_HOST + ':' + REDIS_PORT);
+  console.log('  📦 BullMQ: Connected & Ready on Redis ' + REDIS_HOST + ':' + REDIS_PORT);
 });
 
 redisConnection.on('close', () => {
@@ -57,9 +59,24 @@ downloadQueue.on('error', () => {
 // Map of jobId -> child_process instance (for killing active downloads on cancel)
 const activeProcesses = new Map();
 
+async function isRedisAlive() {
+  if (!isRedisConnected || redisConnection.status !== 'ready') return false;
+  try {
+    const res = await Promise.race([
+      redisConnection.ping(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
+    ]);
+    return res === 'PONG';
+  } catch (_) {
+    isRedisConnected = false;
+    return false;
+  }
+}
+
 module.exports = {
   redisConnection,
   downloadQueue,
   activeProcesses,
-  isRedisReady: () => isRedisConnected
+  isRedisReady: () => isRedisConnected && redisConnection.status === 'ready',
+  isRedisAlive
 };

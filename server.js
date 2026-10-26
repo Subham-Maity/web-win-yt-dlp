@@ -5,7 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const { Worker } = require('bullmq');
 
-const { redisConnection, downloadQueue, activeProcesses, isRedisReady } = require('./queue');
+const { redisConnection, downloadQueue, activeProcesses, isRedisReady, isRedisAlive } = require('./queue');
 const { extractInstagramUsername, downloadInstagramProfile, isInstaloaderAvailable } = require('./instagramService');
 const {
   startInstagramLoginPopup,
@@ -22,16 +22,11 @@ const PORT = 3456;
 
 // ── Process-Level Socket / Error Guards ──────────────────────────────────────
 process.on('uncaughtException', (err) => {
-  if (err && (err.code === 'ECONNRESET' || err.code === 'ECONNABORTED' || err.code === 'ECONNREFUSED')) {
-    return;
-  }
-  console.error('  ⚠️ Uncaught Exception:', err);
+  console.warn('  ⚠️ Handled Uncaught Exception:', err && err.message ? err.message : err);
 });
 
 process.on('unhandledRejection', (reason) => {
-  if (reason && (reason.code === 'ECONNRESET' || reason.code === 'ECONNABORTED' || reason.code === 'ECONNREFUSED')) {
-    return;
-  }
+  console.warn('  ⚠️ Handled Unhandled Rejection:', reason && reason.message ? reason.message : reason);
 });
 
 // ── Paths ──────────────────────────────────────────────────────────────────
@@ -105,30 +100,41 @@ function runYtdlpDownload(job) {
     let title = job.data.title || url;
 
     proc.stdout.on('data', (chunk) => {
-      const lines = chunk.toString().split('\n');
+      const lines = chunk.toString().split(/[\r\n]+/);
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
         // Custom template: "XX.X%|Title|Speed|ETA"
         if (trimmed.includes('|')) {
-          const [pct, extractedTitle, speed, eta] = trimmed.split('|');
-          const num = parseFloat(pct.replace('%', ''));
-          if (!isNaN(num)) {
-            progress = num;
-            if (extractedTitle) title = extractedTitle;
-            let logMsg = `Speed: ${speed || 'N/A'} • ETA: ${eta || 'N/A'}`;
-            job.updateProgress({ progress, title, log: logMsg });
-            const item = jobs.get(id);
-            if (item) {
-              item.progress = progress;
-              item.title = title;
-              item.log = logMsg;
-              item.status = 'downloading';
+          const parts = trimmed.split('|');
+          if (parts.length >= 2) {
+            const pct = parts[0];
+            const extractedTitle = parts[1];
+            const speed = parts[2];
+            const eta = parts[3];
+            const num = parseFloat(pct.replace('%', ''));
+            if (!isNaN(num)) {
+              progress = num;
+              if (extractedTitle && extractedTitle !== 'NA') title = extractedTitle;
+              let logMsg = `Speed: ${speed || 'N/A'} • ETA: ${eta || 'N/A'}`;
+              if (job && typeof job.updateProgress === 'function') {
+                try { job.updateProgress({ progress, title, log: logMsg }); } catch (_) {}
+              }
+              const item = jobs.get(id);
+              if (item) {
+                item.progress = progress;
+                item.title = title;
+                item.log = logMsg;
+                item.status = 'downloading';
+              }
+              broadcast({ type: 'progress', id, status: 'downloading', progress, title, log: logMsg });
+              continue;
             }
-            broadcast({ type: 'progress', id, status: 'downloading', progress, title, log: logMsg });
           }
-        } else if (trimmed.startsWith('[download]')) {
+        }
+
+        if (trimmed.startsWith('[download]')) {
           const m = trimmed.match(/(\d+\.?\d*)%/);
           if (m) {
             progress = parseFloat(m[1]);
@@ -156,8 +162,8 @@ function runYtdlpDownload(job) {
     proc.stderr.on('data', (chunk) => {
       const text = chunk.toString();
       stderrBuf += text;
-      const lastLine = text.split('\n').map(l => l.trim()).filter(Boolean).pop();
-      if (lastLine) {
+      const lastLine = text.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean).pop();
+      if (lastLine && !lastLine.includes('frame=') && !lastLine.includes('fps=')) {
         const item = jobs.get(id);
         if (item) { item.log = lastLine; }
         broadcast({ type: 'progress', id, status: 'downloading', progress, title, log: lastLine });
@@ -390,16 +396,20 @@ app.post('/download', async (req, res) => {
           });
       };
 
-      if (isRedisReady()) {
+      const redisOk = await isRedisAlive();
+      if (redisOk) {
         try {
-          await downloadQueue.add('instagram_profile', {
-            type: 'instagram_profile',
-            username: igProfileUser,
-            cookieSource: 'cookies.txt',
-            profileUrl: url
-          }, { jobId: id });
+          await Promise.race([
+            downloadQueue.add('instagram_profile', {
+              type: 'instagram_profile',
+              username: igProfileUser,
+              cookieSource: 'cookies.txt',
+              profileUrl: url
+            }, { jobId: id }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+          ]);
         } catch (err) {
-          console.error('BullMQ add error for IG profile:', err.message);
+          console.warn('⚠️ BullMQ add error for IG profile, running direct:', err.message);
           runDirectIg();
         }
       } else {
@@ -413,28 +423,24 @@ app.post('/download', async (req, res) => {
       id,
       type: 'standard',
       url,
-      status: 'queued',
+      status: 'downloading',
       progress: 0,
       title: url,
-      log: isRedisReady() ? 'Queued in BullMQ worker...' : 'Direct download mode...',
+      log: 'Starting download...',
       error: '',
       badge: 'Video Download'
     };
-    jobs.set(id, jobData);
-    started.push(id);
-    createdJobs.push(jobData);
-    broadcast({ type: 'job', ...jobData });
 
     const runDirectYtdlp = () => {
       jobData.status = 'downloading';
-      jobData.log = 'Running direct download...';
+      jobData.log = 'Starting download directly...';
       broadcast({ type: 'job', ...jobData });
       runYtdlpDownload({ id, data: { url } })
         .then((result) => {
           jobData.status = 'done';
           jobData.progress = 100;
           jobData.title = result.title || jobData.title;
-          jobData.log = 'Download complete.';
+          jobData.log = 'Download complete. File saved to Downloads/yt-dlp/';
           broadcast({ type: 'job', ...jobData });
         })
         .catch((e) => {
@@ -445,14 +451,29 @@ app.post('/download', async (req, res) => {
         });
     };
 
-    if (isRedisReady()) {
+    const redisOk = await isRedisAlive();
+    if (redisOk) {
+      jobData.status = 'queued';
+      jobData.log = 'Queued in BullMQ worker...';
+      jobs.set(id, jobData);
+      started.push(id);
+      createdJobs.push(jobData);
+      broadcast({ type: 'job', ...jobData });
+
       try {
-        await downloadQueue.add('standard', { type: 'standard', url }, { jobId: id });
+        await Promise.race([
+          downloadQueue.add('standard', { type: 'standard', url }, { jobId: id }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+        ]);
       } catch (err) {
-        console.error('Failed to enqueue to BullMQ:', err.message);
+        console.warn('⚠️ BullMQ add error, running direct download:', err.message);
         runDirectYtdlp();
       }
     } else {
+      jobs.set(id, jobData);
+      started.push(id);
+      createdJobs.push(jobData);
+      broadcast({ type: 'job', ...jobData });
       runDirectYtdlp();
     }
   }
@@ -535,17 +556,21 @@ app.post('/download/instagram-profile', async (req, res) => {
       });
   };
 
-  if (isRedisReady()) {
+  const redisOk = await isRedisAlive();
+  if (redisOk) {
     try {
-      await downloadQueue.add('instagram_profile', {
-        type: 'instagram_profile',
-        username,
-        cookieSource: cookieSource || 'cookies.txt',
-        mediaScope: scope,
-        profileUrl
-      }, { jobId: id });
+      await Promise.race([
+        downloadQueue.add('instagram_profile', {
+          type: 'instagram_profile',
+          username,
+          cookieSource: cookieSource || 'cookies.txt',
+          mediaScope: scope,
+          profileUrl
+        }, { jobId: id }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+      ]);
     } catch (err) {
-      console.error('BullMQ add error:', err.message);
+      console.warn('⚠️ BullMQ add error for profile, running direct:', err.message);
       runDirectProfile();
     }
   } else {
@@ -681,14 +706,16 @@ app.post('/clear-all', async (_req, res) => {
     try {
       await Promise.race([
         (async () => {
-          await downloadQueue.pause();
-          await downloadQueue.drain(true);
-          await downloadQueue.clean(0, 0, 'active');
-          await downloadQueue.clean(0, 0, 'wait');
-          await downloadQueue.clean(0, 0, 'delayed');
-          await downloadQueue.clean(0, 0, 'completed');
-          await downloadQueue.clean(0, 0, 'failed');
-          await downloadQueue.resume();
+          try {
+            await downloadQueue.pause();
+            await downloadQueue.drain(true);
+            await downloadQueue.clean(0, 0, 'active');
+            await downloadQueue.clean(0, 0, 'wait');
+            await downloadQueue.clean(0, 0, 'delayed');
+            await downloadQueue.clean(0, 0, 'completed');
+            await downloadQueue.clean(0, 0, 'failed');
+            await downloadQueue.resume();
+          } catch (_) {}
         })(),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500))
       ]);
