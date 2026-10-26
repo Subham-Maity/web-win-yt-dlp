@@ -25,7 +25,15 @@ if errorlevel 1 (
     goto :check_node_deps
 )
 
-docker info >nul 2>&1
+:: Check if Docker service is running (prevents freezing when Docker Desktop is stopped/unresponsive)
+sc query com.docker.service 2>nul | findstr /i "RUNNING" >nul 2>&1
+if errorlevel 1 (
+    echo  [WARN] Docker Desktop service is not running. BullMQ will fallback to direct mode.
+    goto :check_node_deps
+)
+
+:: Docker service is running; verify daemon responsiveness with a 3-second timeout
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process docker -ArgumentList 'info' -NoNewWindow -PassThru -ErrorAction SilentlyContinue; if (-not $p) { exit 1 }; if (-not $p.WaitForExit(3000)) { try { Stop-Process -Id $p.Id -Force } catch {}; exit 1 }; exit $p.ExitCode" >nul 2>&1
 if errorlevel 1 (
     echo  [WARN] Docker daemon is not active. BullMQ will fallback to direct mode.
     goto :check_node_deps

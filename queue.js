@@ -16,15 +16,28 @@ const redisConnection = new Redis({
 });
 
 let isRedisConnected = false;
+let loggedRedisError = false;
 
 redisConnection.on('connect', () => {
   isRedisConnected = true;
+  loggedRedisError = false;
   console.log('  📦 BullMQ: Connected to Redis on ' + REDIS_HOST + ':' + REDIS_PORT);
+});
+
+redisConnection.on('close', () => {
+  isRedisConnected = false;
+});
+
+redisConnection.on('end', () => {
+  isRedisConnected = false;
 });
 
 redisConnection.on('error', (err) => {
   isRedisConnected = false;
-  console.error('  ⚠️ Redis connection error:', err.message);
+  if (!loggedRedisError) {
+    loggedRedisError = true;
+    console.warn('  ⚠️ Redis connection unavailable (' + err.message + '). Direct execution mode active.');
+  }
 });
 
 // Primary download queue for yt-dlp & Instagram downloads
@@ -35,6 +48,10 @@ const downloadQueue = new Queue('downloadQueue', {
     removeOnComplete: { count: 100 },
     removeOnFail: { count: 100 }
   }
+});
+
+downloadQueue.on('error', () => {
+  // Handled silently when Redis is disconnected; direct mode handles requests
 });
 
 // Map of jobId -> child_process instance (for killing active downloads on cancel)

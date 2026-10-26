@@ -514,6 +514,24 @@
       border-color: var(--muted);
     }
 
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.12);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.25);
+      color: #fff;
+      border-color: #ef4444;
+      box-shadow: 0 4px 16px rgba(239, 68, 68, 0.35);
+    }
+
+    .btn-sm {
+      padding: 6px 14px;
+      font-size: 0.78rem;
+    }
+
     /* ── Queue Section ── */
     .queue-header {
       display: flex;
@@ -1047,6 +1065,7 @@
         <button class="btn btn-add" onclick="addRow()">＋ Add URL</button>
         <button class="btn btn-primary" id="btnDownload" onclick="startStandardDownload()">⬇ Download Queue</button>
         <button class="btn btn-ghost" onclick="clearDone()">🗑 Clear Finished</button>
+        <button class="btn btn-danger" onclick="clearAllQueue()" title="Force cancel and remove all downloads">🛑 Clear Queue</button>
       </div>
     </div>
   </div>
@@ -1107,6 +1126,7 @@
           ⚡ Fetch & Download Profile Media Till End
         </button>
         <button class="btn btn-ghost" onclick="clearDone()">🗑 Clear Finished</button>
+        <button class="btn btn-danger" onclick="clearAllQueue()" title="Force cancel and remove all downloads">🛑 Clear Queue</button>
       </div>
     </div>
   </div>
@@ -1118,7 +1138,15 @@
         Download Queue
         <span class="bullmq-tag">BullMQ Powered</span>
       </div>
-      <span class="queue-count" id="queueCount">0 items</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="queue-count" id="queueCount">0 items</span>
+        <button class="btn btn-ghost btn-sm" onclick="clearDone()" title="Remove finished, failed, or cancelled downloads">
+          🗑 Clear Finished
+        </button>
+        <button class="btn btn-danger btn-sm" id="btnClearQueueHeader" onclick="clearAllQueue()" title="Force cancel active downloads and purge all items from the queue">
+          🛑 Clear Queue
+        </button>
+      </div>
     </div>
 
     <div class="job-list" id="jobList">
@@ -1302,6 +1330,24 @@
         }
         renderEmpty();
         updateCount();
+      } else if (msg.type === 'cleared_all') {
+        for (const id in jobData) {
+          delete jobData[id];
+          const el = document.getElementById('job-' + id);
+          if (el) el.remove();
+        }
+        renderEmpty();
+        updateCount();
+        const btn = document.getElementById('btnDownload');
+        if (btn) { btn.disabled = false; btn.textContent = '⬇ Download Queue'; }
+        const igBtn = document.getElementById('btnIgDownload');
+        if (igBtn) { igBtn.disabled = false; igBtn.textContent = '⚡ Fetch & Download Profile Media Till End'; }
+      } else if (msg.type === 'job_removed') {
+        delete jobData[msg.id];
+        const el = document.getElementById('job-' + msg.id);
+        if (el) el.remove();
+        renderEmpty();
+        updateCount();
       } else if (msg.type === 'instagram_auth_success') {
         const box = document.getElementById('authStatusBox');
         if (box) {
@@ -1410,7 +1456,10 @@
       const iconEl = existing.querySelector('.job-icon');
       if (iconEl) iconEl.textContent = icon;
       const cancelBtn = existing.querySelector('.job-cancel');
-      if (cancelBtn) cancelBtn.style.display = isActive ? 'flex' : 'none';
+      if (cancelBtn) {
+        cancelBtn.style.display = 'flex';
+        cancelBtn.title = isActive ? 'Cancel Download' : 'Remove from List';
+      }
       const titleEl = document.getElementById('title-' + id);
       if (titleEl) titleEl.textContent = displayTitle;
       const logEl = document.getElementById('log-' + id);
@@ -1434,9 +1483,9 @@
             <div class="job-url">${escHtml(j.url)}</div>
           </div>
           <div class="job-actions">
-            <button class="job-cancel" id="cancel-${id}" title="Cancel Download"
-              style="display:${isActive ? 'flex' : 'none'}"
-              onclick="cancelJob('${id}')">✕</button>
+            <button class="job-cancel" id="cancel-${id}" title="${isActive ? 'Cancel Download' : 'Remove from List'}"
+              style="display:flex"
+              onclick="deleteOrCancelJob('${id}')">✕</button>
           </div>
         </div>
         <div class="job-status-area">${renderStatusArea(id, j)}</div>
@@ -1621,14 +1670,19 @@
     btn.disabled = true;
     btn.textContent = '⏳ Queuing…';
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
     try {
       const r = await fetch('/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls })
+        body: JSON.stringify({ urls }),
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
       const d = await r.json();
-      toast(`🚀 Enqueued ${d.started ? d.started.length : 1} job(s) in BullMQ!`);
+      toast(`🚀 Enqueued ${d.started ? d.started.length : 1} job(s)!`);
       
       // Instantly render cards in DOM without waiting for SSE round-trip
       if (Array.isArray(d.jobs)) {
@@ -1638,7 +1692,12 @@
       document.getElementById('urlList').innerHTML = '';
       addRow();
     } catch (e) {
-      toast('❌ Server error: ' + e.message, 4000);
+      clearTimeout(timeoutId);
+      if (e.name === 'AbortError') {
+        toast('⚠️ Request timed out, but check queue for updates.', 4000);
+      } else {
+        toast('❌ Server error: ' + e.message, 4000);
+      }
     } finally {
       btn.disabled = false;
       btn.textContent = '⬇ Download Queue';
@@ -1690,12 +1749,71 @@
 
   // ── Job Controls ───────────────────────────────────────────────────────────
   async function cancelJob(id) {
-    await fetch('/cancel/' + id, { method: 'POST' });
+    if (jobData[id]) {
+      jobData[id].status = 'cancelled';
+      jobData[id].log = 'Cancelling download...';
+      upsertJobCard(id);
+    }
     toast('⛔ Cancel requested');
+    try {
+      await fetch('/cancel/' + id, { method: 'POST' });
+    } catch (_) {}
+  }
+
+  async function deleteJob(id) {
+    delete jobData[id];
+    const el = document.getElementById('job-' + id);
+    if (el) el.remove();
+    renderEmpty();
+    updateCount();
+    try {
+      await fetch('/job/' + id, { method: 'DELETE' });
+    } catch (_) {}
+  }
+
+  async function deleteOrCancelJob(id) {
+    const j = jobData[id];
+    if (!j) return;
+    if (j.status === 'downloading' || j.status === 'queued') {
+      await cancelJob(id);
+    } else {
+      await deleteJob(id);
+    }
   }
 
   async function clearDone() {
-    await fetch('/clear', { method: 'POST' });
+    toast('🧹 Clearing finished downloads...');
+    try {
+      await fetch('/clear', { method: 'POST' });
+    } catch (_) {}
+  }
+
+  async function clearAllQueue() {
+    if (!confirm('Are you sure you want to stop active downloads and clear the entire queue?')) return;
+
+    // Immediately restore buttons in case they were stuck in "Queuing..."
+    const btn = document.getElementById('btnDownload');
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Download Queue'; }
+    const igBtn = document.getElementById('btnIgDownload');
+    if (igBtn) { igBtn.disabled = false; igBtn.textContent = '⚡ Fetch & Download Profile Media Till End'; }
+
+    // Immediate optimistic local DOM wipe
+    for (const id in jobData) {
+      delete jobData[id];
+      const el = document.getElementById('job-' + id);
+      if (el) el.remove();
+    }
+    renderEmpty();
+    updateCount();
+    toast('🛑 Clearing and resetting queue...');
+
+    try {
+      const res = await fetch('/clear-all', { method: 'POST' });
+      const data = await res.json();
+      toast(`✅ Queue cleared (${data.cleared || 0} items removed).`);
+    } catch (e) {
+      toast('⚠️ Notice: ' + e.message);
+    }
   }
 
   async function openFolder() {

@@ -26,6 +26,10 @@ Now features a dedicated **Instagram Profile Media Downloader** that can scrape 
 - **Standard Video Downloader**:
   - Download individual videos or multiple URLs in bulk from YouTube, Instagram Reels, TikTok, X (Twitter), Facebook, and 1,000+ supported sites.
   - Multi-URL paste detection (splits pasted lines or spaces automatically).
+- **Queue Management & Quick Cancellation**:
+  - **🛑 Clear Queue**: 1-click button in the header and panel to abort in-flight downloads and purge the entire queue.
+  - **Individual Job Controls**: Cancel running tasks or remove finished entries using the `✕` action button on each card.
+  - **Automatic Direct Mode Fallback**: Automatically switches to standalone direct downloading if Redis/Docker is stopped or unresponsive, ensuring zero downtime.
 - **Real-Time SSE Dashboard**: Live progress bars, speed, titles, and item completion tickers.
 - **One-Click Startup (`run.bat`)**: Automatically checks and starts Docker Redis, installs dependencies, and launches the browser UI at `http://localhost:3456`.
 

@@ -20,6 +20,20 @@ const {
 const app = express();
 const PORT = 3456;
 
+// ── Process-Level Socket / Error Guards ──────────────────────────────────────
+process.on('uncaughtException', (err) => {
+  if (err && (err.code === 'ECONNRESET' || err.code === 'ECONNABORTED' || err.code === 'ECONNREFUSED')) {
+    return;
+  }
+  console.error('  ⚠️ Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  if (reason && (reason.code === 'ECONNRESET' || reason.code === 'ECONNABORTED' || reason.code === 'ECONNREFUSED')) {
+    return;
+  }
+});
+
 // ── Paths ──────────────────────────────────────────────────────────────────
 const YTDLP_EXE     = path.join(__dirname, 'yt-dlp.exe');
 const GALLERYDL_EXE = path.join(__dirname, 'gallery-dl.exe');
@@ -258,6 +272,10 @@ downloadWorker.on('failed', (job, err) => {
   }
 });
 
+downloadWorker.on('error', () => {
+  // Handled silently when Redis is unavailable
+});
+
 // ── SSE Endpoint ─────────────────────────────────────────────────────────────
 app.get('/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -331,15 +349,7 @@ app.post('/download', async (req, res) => {
       createdJobs.push(jobData);
       broadcast({ type: 'job', ...jobData });
 
-      try {
-        await downloadQueue.add('instagram_profile', {
-          type: 'instagram_profile',
-          username: igProfileUser,
-          cookieSource: 'cookies.txt',
-          profileUrl: url
-        }, { jobId: id });
-      } catch (err) {
-        console.error('BullMQ add error for IG profile:', err.message);
+      const runDirectIg = () => {
         jobData.status = 'downloading';
         jobData.log = 'Starting scraper directly...';
         broadcast({ type: 'job', ...jobData });
@@ -378,6 +388,22 @@ app.post('/download', async (req, res) => {
             jobData.log = 'Failed: ' + e.message;
             broadcast({ type: 'job', ...jobData });
           });
+      };
+
+      if (isRedisReady()) {
+        try {
+          await downloadQueue.add('instagram_profile', {
+            type: 'instagram_profile',
+            username: igProfileUser,
+            cookieSource: 'cookies.txt',
+            profileUrl: url
+          }, { jobId: id });
+        } catch (err) {
+          console.error('BullMQ add error for IG profile:', err.message);
+          runDirectIg();
+        }
+      } else {
+        runDirectIg();
       }
       continue;
     }
@@ -390,7 +416,7 @@ app.post('/download', async (req, res) => {
       status: 'queued',
       progress: 0,
       title: url,
-      log: 'Queued in BullMQ worker...',
+      log: isRedisReady() ? 'Queued in BullMQ worker...' : 'Direct download mode...',
       error: '',
       badge: 'Video Download'
     };
@@ -399,12 +425,7 @@ app.post('/download', async (req, res) => {
     createdJobs.push(jobData);
     broadcast({ type: 'job', ...jobData });
 
-    // Enqueue to BullMQ
-    try {
-      await downloadQueue.add('standard', { type: 'standard', url }, { jobId: id });
-    } catch (err) {
-      console.error('Failed to enqueue to BullMQ:', err.message);
-      // Fallback direct execution if Redis unavailable
+    const runDirectYtdlp = () => {
       jobData.status = 'downloading';
       jobData.log = 'Running direct download...';
       broadcast({ type: 'job', ...jobData });
@@ -422,6 +443,17 @@ app.post('/download', async (req, res) => {
           jobData.log = 'Failed: ' + e.message;
           broadcast({ type: 'job', ...jobData });
         });
+    };
+
+    if (isRedisReady()) {
+      try {
+        await downloadQueue.add('standard', { type: 'standard', url }, { jobId: id });
+      } catch (err) {
+        console.error('Failed to enqueue to BullMQ:', err.message);
+        runDirectYtdlp();
+      }
+    } else {
+      runDirectYtdlp();
     }
   }
 
@@ -461,17 +493,7 @@ app.post('/download/instagram-profile', async (req, res) => {
   jobs.set(id, jobData);
   broadcast({ type: 'job', ...jobData });
 
-  try {
-    await downloadQueue.add('instagram_profile', {
-      type: 'instagram_profile',
-      username,
-      cookieSource: cookieSource || 'cookies.txt',
-      mediaScope: scope,
-      profileUrl
-    }, { jobId: id });
-  } catch (err) {
-    console.error('BullMQ add error:', err.message);
-    // Direct fallback
+  const runDirectProfile = () => {
     jobData.status = 'downloading';
     jobData.log = 'Starting scraper directly...';
     broadcast({ type: 'job', ...jobData });
@@ -511,6 +533,23 @@ app.post('/download/instagram-profile', async (req, res) => {
         jobData.log = 'Failed: ' + e.message;
         broadcast({ type: 'job', ...jobData });
       });
+  };
+
+  if (isRedisReady()) {
+    try {
+      await downloadQueue.add('instagram_profile', {
+        type: 'instagram_profile',
+        username,
+        cookieSource: cookieSource || 'cookies.txt',
+        mediaScope: scope,
+        profileUrl
+      }, { jobId: id });
+    } catch (err) {
+      console.error('BullMQ add error:', err.message);
+      runDirectProfile();
+    }
+  } else {
+    runDirectProfile();
   }
 
   res.json({ started: [id], username, job: jobData });
@@ -548,12 +587,17 @@ app.post('/cancel/:id', async (req, res) => {
     activeProcesses.delete(id);
   }
 
-  try {
-    const bullJob = await downloadQueue.getJob(id);
-    if (bullJob) {
-      await bullJob.remove();
-    }
-  } catch (_) {}
+  if (isRedisReady()) {
+    try {
+      await Promise.race([
+        (async () => {
+          const bullJob = await downloadQueue.getJob(id);
+          if (bullJob) await bullJob.remove();
+        })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
+      ]);
+    } catch (_) {}
+  }
 
   if (job) {
     job.status = 'cancelled';
@@ -564,6 +608,37 @@ app.post('/cancel/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Delete single job from list ──────────────────────────────────────────────
+app.delete('/job/:id', async (req, res) => {
+  const id = req.params.id;
+  if (activeProcesses.has(id)) {
+    const proc = activeProcesses.get(id);
+    try {
+      proc.kill('SIGTERM');
+      if (proc.pid) {
+        spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
+      }
+    } catch (_) {}
+    activeProcesses.delete(id);
+  }
+
+  if (isRedisReady()) {
+    try {
+      await Promise.race([
+        (async () => {
+          const bullJob = await downloadQueue.getJob(id);
+          if (bullJob) await bullJob.remove();
+        })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
+      ]);
+    } catch (_) {}
+  }
+
+  jobs.delete(id);
+  broadcast({ type: 'job_removed', id });
+  res.json({ ok: true });
+});
+
 // ── Clear finished/errored jobs ───────────────────────────────────────────────
 app.post('/clear', async (_req, res) => {
   for (const [id, job] of jobs) {
@@ -571,13 +646,64 @@ app.post('/clear', async (_req, res) => {
       jobs.delete(id);
     }
   }
-  try {
-    await downloadQueue.clean(0, 100, 'completed');
-    await downloadQueue.clean(0, 100, 'failed');
-  } catch (_) {}
+
+  if (isRedisReady()) {
+    try {
+      await Promise.race([
+        Promise.all([
+          downloadQueue.clean(0, 100, 'completed'),
+          downloadQueue.clean(0, 100, 'failed')
+        ]),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
+      ]);
+    } catch (_) {}
+  }
 
   broadcast({ type: 'cleared' });
   res.json({ ok: true });
+});
+
+// ── Clear ENTIRE queue (stuck, queued, downloading, finished) ─────────────────
+app.post('/clear-all', async (_req, res) => {
+  // 1. Terminate all running download child processes
+  for (const [id, proc] of activeProcesses.entries()) {
+    try {
+      proc.kill('SIGTERM');
+      if (proc.pid) {
+        spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
+      }
+    } catch (_) {}
+  }
+  activeProcesses.clear();
+
+  // 2. Safely purge BullMQ queue if Redis is connected (with 1.5s timeout)
+  if (isRedisReady()) {
+    try {
+      await Promise.race([
+        (async () => {
+          await downloadQueue.pause();
+          await downloadQueue.drain(true);
+          await downloadQueue.clean(0, 0, 'active');
+          await downloadQueue.clean(0, 0, 'wait');
+          await downloadQueue.clean(0, 0, 'delayed');
+          await downloadQueue.clean(0, 0, 'completed');
+          await downloadQueue.clean(0, 0, 'failed');
+          await downloadQueue.resume();
+        })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500))
+      ]);
+    } catch (e) {
+      console.warn('  ⚠️ BullMQ purge notice:', e.message);
+    }
+  }
+
+  // 3. Clear in-memory jobs completely
+  const totalCleared = jobs.size;
+  jobs.clear();
+
+  // 4. Broadcast full wipe to all clients
+  broadcast({ type: 'cleared_all' });
+  res.json({ ok: true, cleared: totalCleared });
 });
 
 // ── Open download folder ──────────────────────────────────────────────────────
