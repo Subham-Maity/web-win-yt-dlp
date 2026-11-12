@@ -413,12 +413,49 @@ async function ensureCdpBrowser({ visible = false, initialUrl = 'about:blank' } 
   throw new Error('Timed out waiting for Chrome/Edge CDP debugging port to start.');
 }
 
-function sendCdpCommand(ws, id, method, params = {}) {
+function openWebSocket(wsUrl, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch (_) {}
+      reject(new Error('CDP WebSocket connection timed out'));
+    }, timeoutMs);
+
+    ws.onopen = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ws);
+    };
+    ws.onerror = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new Error('CDP WebSocket connection error'));
+    };
+  });
+}
+
+function sendCdpCommand(ws, id, method, params = {}, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      ws.removeEventListener('message', onMessage);
+      reject(new Error(`CDP command ${method} timed out`));
+    }, timeoutMs);
+
     const onMessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.id === id) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
           ws.removeEventListener('message', onMessage);
           if (msg.error) reject(new Error(msg.error.message || 'CDP error'));
           else resolve(msg.result);
@@ -426,16 +463,21 @@ function sendCdpCommand(ws, id, method, params = {}) {
       } catch (_) {}
     };
     ws.addEventListener('message', onMessage);
-    ws.send(JSON.stringify({ id, method, params }));
+    try {
+      ws.send(JSON.stringify({ id, method, params }));
+    } catch (err) {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        ws.removeEventListener('message', onMessage);
+        reject(err);
+      }
+    }
   });
 }
 
 async function openVisibleCdpTab(browserWsUrl, url) {
-  const ws = new WebSocket(browserWsUrl);
-  await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = reject;
-  });
+  const ws = await openWebSocket(browserWsUrl);
   try {
     await sendCdpCommand(ws, 1, 'Target.createTarget', { url });
   } finally {
@@ -590,11 +632,7 @@ function classifyStreamCandidate(url, mimeType = '') {
 
 async function runCdpScan(url, cookiesFilePath) {
   const browserInfo = await ensureCdpBrowser({ visible: false });
-  const browserWs = new WebSocket(browserInfo.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    browserWs.onopen = resolve;
-    browserWs.onerror = reject;
-  });
+  const browserWs = await openWebSocket(browserInfo.webSocketDebuggerUrl);
 
   let targetId = null;
   let pageWs = null;
@@ -602,11 +640,7 @@ async function runCdpScan(url, cookiesFilePath) {
   try {
     const created = await sendCdpCommand(browserWs, 1, 'Target.createTarget', { url: 'about:blank' });
     targetId = created.targetId;
-    pageWs = new WebSocket(`ws://127.0.0.1:${SCRAPER_CDP_PORT}/devtools/page/${targetId}`);
-    await new Promise((resolve, reject) => {
-      pageWs.onopen = resolve;
-      pageWs.onerror = reject;
-    });
+    pageWs = await openWebSocket(`ws://127.0.0.1:${SCRAPER_CDP_PORT}/devtools/page/${targetId}`);
 
     let cmdId = 10;
     await sendCdpCommand(pageWs, ++cmdId, 'Page.enable');
@@ -671,11 +705,7 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
   }
 
   const browserInfo = await ensureCdpBrowser({ visible: false });
-  const browserWs = new WebSocket(browserInfo.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    browserWs.onopen = resolve;
-    browserWs.onerror = reject;
-  });
+  const browserWs = await openWebSocket(browserInfo.webSocketDebuggerUrl);
 
   let targetId = null;
   let pageWs = null;
@@ -683,11 +713,7 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
   try {
     const created = await sendCdpCommand(browserWs, 1, 'Target.createTarget', { url: 'about:blank' });
     targetId = created.targetId;
-    pageWs = new WebSocket(`ws://127.0.0.1:${SCRAPER_CDP_PORT}/devtools/page/${targetId}`);
-    await new Promise((resolve, reject) => {
-      pageWs.onopen = resolve;
-      pageWs.onerror = reject;
-    });
+    pageWs = await openWebSocket(`ws://127.0.0.1:${SCRAPER_CDP_PORT}/devtools/page/${targetId}`);
 
     let cmdId = 10;
     await sendCdpCommand(pageWs, ++cmdId, 'Page.enable');

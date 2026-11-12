@@ -91,8 +91,12 @@ function sanitizeFileName(name) {
 // ── yt-dlp Worker Handler ────────────────────────────────────────────────────
 function runYtdlpDownload(job) {
   return new Promise((resolve, reject) => {
-    const { url, resolvedHeaders, customOutputTitle, useCookies = true } = job.data;
+    const { url, resolvedHeaders, customOutputTitle, useCookies = true, abortSignal = null } = job.data;
     const id = job.id;
+
+    if (abortSignal && abortSignal.aborted) {
+      return reject(new Error('Cancelled by user'));
+    }
 
     const j = jobs.get(id);
     if (j) {
@@ -108,6 +112,9 @@ function runYtdlpDownload(job) {
 
     const args = [
       '--no-playlist',
+      '--socket-timeout', '20',
+      '--retries', '3',
+      '--fragment-retries', '3',
       '--js-runtimes', `node:${process.execPath}`,
       '-o', outTemplate,
       '--newline',
@@ -220,6 +227,7 @@ function runYtdlpDownload(job) {
       }
     });
 
+    let settled = false;
     const cleanup = () => {
       activeProcesses.delete(id);
       if (tempCookiesPath && fs.existsSync(tempCookiesPath)) {
@@ -227,7 +235,24 @@ function runYtdlpDownload(job) {
       }
     };
 
+    if (abortSignal) {
+      abortSignal.addEventListener('abort', () => {
+        if (settled) return;
+        settled = true;
+        try {
+          proc.kill('SIGTERM');
+          if (proc.pid) {
+            spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
+          }
+        } catch (_) {}
+        cleanup();
+        reject(new Error('Cancelled by user'));
+      }, { once: true });
+    }
+
     proc.on('close', (code) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       if (code === 0) {
         resolve({ title, progress: 100 });
@@ -245,6 +270,8 @@ function runYtdlpDownload(job) {
     });
 
     proc.on('error', (err) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       reject(err);
     });
@@ -335,6 +362,7 @@ downloadWorker.on('error', () => {
 // ── Full Webpage Scraper Sequential Worker (Concurrency: 1) ──────────────────
 const activeScrapeAborts = new Map();
 let directScrapeChain = Promise.resolve();
+let scrapeGeneration = 0;
 
 async function runScrapeJob(job) {
   const id = job.id;
@@ -383,6 +411,7 @@ async function runScrapeJob(job) {
         title: resolvedTitle,
         customOutputTitle: resolvedTitle,
         useCookies,
+        abortSignal: controller.signal,
         resolvedHeaders: {
           referer: sniffed.referer,
           userAgent: sniffed.userAgent,
@@ -841,7 +870,9 @@ app.post('/clear', async (_req, res) => {
 
 // ── Clear ENTIRE queue (stuck, queued, downloading, finished) ─────────────────
 app.post('/clear-all', async (_req, res) => {
-  // 1. Mark all queued/active jobs cancelled & abort active sniffs / processes
+  // 1. Mark all queued/active jobs cancelled, reset sequential chain, & abort active sniffs / processes
+  scrapeGeneration++;
+  directScrapeChain = Promise.resolve();
   for (const [id, job] of jobs.entries()) {
     job.status = 'cancelled';
     stopJobExecution(id);
@@ -985,10 +1016,12 @@ async function enqueueScrapeJob({ pageUrl, title, mode, useCookies, queueIndex, 
   jobs.set(id, jobData);
   broadcast({ type: 'job', ...jobData });
 
+  const myGen = scrapeGeneration;
   const runDirectSequential = () => {
     directScrapeChain = directScrapeChain
       .catch(() => {})
       .then(async () => {
+        if (myGen !== scrapeGeneration) return;
         const current = jobs.get(id);
         if (!current || current.status === 'cancelled') return;
         try {
