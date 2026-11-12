@@ -744,12 +744,14 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
       let settleTimer = null;
       let playInterval = null;
       let overallTimer = null;
+      let reloadTimer = null;
 
       const finish = async () => {
         if (settled) return;
         settled = true;
         clearTimeout(settleTimer);
         clearTimeout(overallTimer);
+        clearTimeout(reloadTimer);
         clearInterval(playInterval);
 
         if (!bestCandidate) {
@@ -789,6 +791,7 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
         settled = true;
         clearTimeout(settleTimer);
         clearTimeout(overallTimer);
+        clearTimeout(reloadTimer);
         clearInterval(playInterval);
         reject(err);
       };
@@ -965,6 +968,12 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
         } catch (_) {}
       }, 2000);
 
+      reloadTimer = setTimeout(() => {
+        if (!settled && !bestCandidate && autoClickCount === 0) {
+          sendCdpCommand(pageWs, ++cmdId, 'Page.reload', { ignoreCache: false }).catch(() => {});
+        }
+      }, 18000);
+
       sendCdpCommand(pageWs, ++cmdId, 'Page.navigate', { url }).catch(fail);
     });
 
@@ -1021,11 +1030,11 @@ async function sniffMediaStream({ url, mode = 'auto', cookiesFilePath, abortSign
   }
 
   if (useExt) {
-    const data = await dispatchBridgeTask('sniff', url, {}, 45000, abortSignal);
+    const data = await dispatchBridgeTask('sniff', url, {}, 50000, abortSignal);
     return { ...data, via: 'extension' };
   }
 
-  const data = await runCdpSniff(url, cookiesFilePath, 40000, abortSignal);
+  const data = await runCdpSniff(url, cookiesFilePath, 45000, abortSignal);
   return { ...data, via: 'cdp' };
 }
 

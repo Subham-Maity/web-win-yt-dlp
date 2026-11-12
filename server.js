@@ -129,11 +129,31 @@ function scheduleSaveQueueState() {
 
 // ── yt-dlp Worker Handler ────────────────────────────────────────────────────
 const STREAM_EXPIRED_RE = /(HTTP Error 410|410:\s*Gone|HTTP Error 403|403:\s*Forbidden|HTTP Error 401|401:\s*Unauthorized|Unable to download fragment)/i;
+const FRAG_CORRUPT_RE = /(Errno 2|No such file or directory|part-Frag|unable to rename)/i;
 
-function makeStreamExpiredError(message) {
-  const err = new Error(message || 'Stream link expired or stalled');
-  err.code = 'STREAM_EXPIRED';
+function makeTypedError(message, code) {
+  const err = new Error(message || 'Download error');
+  err.code = code;
   return err;
+}
+
+function cleanupPartialFilesForId(customId) {
+  const safeId = sanitizeFileName(customId);
+  if (!safeId) return 0;
+  let removed = 0;
+  try {
+    const marker = `[${safeId}]`;
+    const files = fs.readdirSync(DOWNLOAD_DIR);
+    for (const f of files) {
+      if (f.includes(marker) && (/\.part/i.test(f) || /\.ytdl$/i.test(f))) {
+        try {
+          fs.unlinkSync(path.join(DOWNLOAD_DIR, f));
+          removed++;
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return removed;
 }
 
 function runYtdlpDownload(job) {
@@ -145,7 +165,8 @@ function runYtdlpDownload(job) {
       customOutputId,
       useCookies = true,
       abortSignal = null,
-      detectExpiry = false
+      detectExpiry = false,
+      noContinue = false
     } = job.data;
     const id = job.id;
 
@@ -168,7 +189,7 @@ function runYtdlpDownload(job) {
 
     const args = [
       '--no-playlist',
-      '--concurrent-fragments', '4',
+      '--concurrent-fragments', '1',
       '--socket-timeout', '20',
       '--retries', '3',
       '--fragment-retries', '3',
@@ -177,6 +198,10 @@ function runYtdlpDownload(job) {
       '--newline',
       '--progress-template', '%(progress._percent_str)s|%(info.title)s|%(progress._speed_str)s|%(progress._eta_str)s',
     ];
+
+    if (noContinue) {
+      args.push('--no-continue');
+    }
 
     if (resolvedHeaders && resolvedHeaders.referer) {
       args.push('--referer', resolvedHeaders.referer);
@@ -233,7 +258,7 @@ function runYtdlpDownload(job) {
       settled = true;
       killProc();
       cleanup();
-      reject(makeStreamExpiredError(reason));
+      reject(makeTypedError(reason, 'STREAM_EXPIRED'));
     };
 
     if (detectExpiry) {
@@ -370,8 +395,11 @@ function runYtdlpDownload(job) {
         } else if (cleanErr.includes('empty media response') || cleanErr.includes('Instagram API is not granting access')) {
           cleanErr = 'Instagram requires login cookies. Please export cookies (including sessionid) to cookies.txt.';
         }
+        if (detectExpiry && FRAG_CORRUPT_RE.test(stderrBuf)) {
+          return reject(makeTypedError(cleanErr, 'FRAG_CORRUPT'));
+        }
         if (detectExpiry && (STREAM_EXPIRED_RE.test(stderrBuf) || /timed out/i.test(cleanErr))) {
-          return reject(makeStreamExpiredError(cleanErr));
+          return reject(makeTypedError(cleanErr, 'STREAM_EXPIRED'));
         }
         reject(new Error(cleanErr));
       }
@@ -487,6 +515,9 @@ async function runScrapeJob(job) {
   activeScrapeAborts.set(id, controller);
 
   const MAX_REFRESH_ATTEMPTS = 5;
+  const outputId = extractOutputIdFromUrl(pageUrl);
+  let forceNoContinue = false;
+
   try {
     let lastError = null;
     for (let attempt = 1; attempt <= MAX_REFRESH_ATTEMPTS; attempt++) {
@@ -497,18 +528,34 @@ async function runScrapeJob(job) {
       if (j) {
         j.status = 'downloading';
         j.stage = 'sniffing';
-        j.log = attempt === 1
-          ? 'Opening muted tab & auto-clicking Play to capture stream...'
-          : `🔄 Stream expired/stalled — reopening page for fresh link (attempt ${attempt}/${MAX_REFRESH_ATTEMPTS})...`;
+        if (attempt === 1) {
+          j.log = 'Opening muted tab & auto-clicking Play to capture stream...';
+        } else if (!j.log || !j.log.startsWith('🔄')) {
+          j.log = `🔄 Reopening browser to capture fresh link (attempt ${attempt}/${MAX_REFRESH_ATTEMPTS})...`;
+        }
         broadcast({ type: 'job', ...j });
       }
 
-      const sniffed = await sniffMediaStream({
-        url: pageUrl,
-        mode,
-        cookiesFilePath: COOKIES,
-        abortSignal: controller.signal
-      });
+      let sniffed;
+      try {
+        sniffed = await sniffMediaStream({
+          url: pageUrl,
+          mode,
+          cookiesFilePath: COOKIES,
+          abortSignal: controller.signal
+        });
+      } catch (sniffErr) {
+        lastError = sniffErr;
+        if (attempt < MAX_REFRESH_ATTEMPTS && !controller.signal.aborted && (!j || j.status !== 'cancelled')) {
+          if (j) {
+            j.log = `🔄 Capture timed out (${sniffErr.message}) — retrying in browser (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
+            broadcast({ type: 'job', ...j });
+          }
+          await new Promise(r => setTimeout(r, 1200));
+          continue;
+        }
+        throw sniffErr;
+      }
 
       if (j && j.status === 'cancelled') {
         throw new Error('Cancelled by user');
@@ -521,7 +568,7 @@ async function runScrapeJob(job) {
         j.stage = 'downloading';
         j.log = attempt === 1
           ? `Stream link captured via ${sniffed.via || 'browser'}! Starting yt-dlp download...`
-          : `🔄 Fresh stream link captured (attempt ${attempt}/${MAX_REFRESH_ATTEMPTS})! Resuming download...`;
+          : `🔄 Fresh stream link captured (attempt ${attempt}/${MAX_REFRESH_ATTEMPTS})! ${forceNoContinue ? 'Restarting clean download...' : 'Resuming download...'}`;
         broadcast({ type: 'job', ...j });
         scheduleSaveQueueState();
       }
@@ -533,9 +580,10 @@ async function runScrapeJob(job) {
             url: sniffed.mediaUrl,
             title: resolvedTitle,
             customOutputTitle: resolvedTitle,
-            customOutputId: extractOutputIdFromUrl(pageUrl),
+            customOutputId: outputId,
             useCookies,
             detectExpiry: true,
+            noContinue: forceNoContinue,
             abortSignal: controller.signal,
             resolvedHeaders: {
               referer: sniffed.referer,
@@ -552,14 +600,29 @@ async function runScrapeJob(job) {
         };
       } catch (dlErr) {
         lastError = dlErr;
+        if (dlErr && dlErr.code === 'FRAG_CORRUPT' && attempt < MAX_REFRESH_ATTEMPTS && !controller.signal.aborted) {
+          const removed = cleanupPartialFilesForId(outputId);
+          forceNoContinue = true;
+          if (j) {
+            j.progress = 0;
+            j.log = `🔄 Fragment mismatch detected (cleaned ${removed} temp file(s)) — grabbing fresh link & restarting clean (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
+            broadcast({ type: 'job', ...j });
+          }
+          console.log(`  🔄 [${id}] Fragment error (${dlErr.message}) — cleaned ${removed} part files, retrying clean (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})`);
+          continue;
+        }
         if (dlErr && dlErr.code === 'STREAM_EXPIRED' && attempt < MAX_REFRESH_ATTEMPTS && !controller.signal.aborted) {
+          if (j) {
+            j.log = `🔄 Stream expired/stalled — reopening browser for fresh link (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
+            broadcast({ type: 'job', ...j });
+          }
           console.log(`  🔄 [${id}] ${dlErr.message} — refreshing stream URL (attempt ${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`);
           continue;
         }
         throw dlErr;
       }
     }
-    throw lastError || new Error('Download failed after stream refresh attempts.');
+    throw lastError || new Error('Download failed after retry attempts.');
   } finally {
     activeScrapeAborts.delete(id);
   }
