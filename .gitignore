@@ -9,6 +9,7 @@ ytdlp_ig_cookies_*.txt
 # Download directories / media artifacts
 subham_xam/
 downloads/
+queue-state.json
 
 # Logs
 npm-debug.log*

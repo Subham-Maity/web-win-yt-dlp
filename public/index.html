@@ -131,6 +131,27 @@
       box-shadow: 0 0 8px var(--cyan);
     }
 
+    .status-dot.red {
+      background: var(--red);
+      box-shadow: 0 0 8px var(--red);
+    }
+
+    .server-offline-banner {
+      display: none;
+      background: rgba(239, 68, 68, 0.14);
+      border-bottom: 1px solid rgba(239, 68, 68, 0.45);
+      color: #fecaca;
+      padding: 10px 24px;
+      font-size: 0.84rem;
+      font-weight: 600;
+      text-align: center;
+      backdrop-filter: blur(8px);
+    }
+
+    .server-offline-banner.active {
+      display: block;
+    }
+
     @keyframes pulse {
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.5; transform: scale(0.9); }
@@ -1362,11 +1383,15 @@
       <span>BullMQ: <strong id="lblRedis">Connected</strong></span>
     </div>
     <div class="sys-pill">
-      <div class="status-dot"></div>
+      <div class="status-dot" id="dotServer"></div>
       <span id="hdrStatus">Server Ready</span>
     </div>
   </div>
 </header>
+
+<div class="server-offline-banner" id="serverOfflineBanner">
+  🔴 Backend server (<code>localhost:3456</code>) is disconnected or stopped — active downloads are paused. Start <code>run.bat</code> to reconnect and auto-resume pending queue items.
+</div>
 
 <main>
 
@@ -1789,18 +1814,49 @@
     } catch(e) {}
   }
 
+  let serverFailCount = 0;
+  function setServerOnline(isOnline) {
+    const banner = document.getElementById('serverOfflineBanner');
+    const dot = document.getElementById('dotServer');
+    const hdr = document.getElementById('hdrStatus');
+    if (isOnline) {
+      serverFailCount = 0;
+      if (banner) banner.classList.remove('active');
+      if (dot) dot.className = 'status-dot';
+      if (hdr) hdr.textContent = 'Server Ready';
+    } else {
+      if (banner) banner.classList.add('active');
+      if (dot) dot.className = 'status-dot red';
+      if (hdr) hdr.textContent = 'Server Offline';
+    }
+  }
+
   // ── Fetch Full Jobs List (Ensures Instant Queue Sync) ──────────────────────
   async function fetchJobs() {
     try {
-      const r = await fetch('/jobs');
+      const r = await fetch('/jobs', { signal: AbortSignal.timeout(2000) });
       if (!r.ok) return;
       const d = await r.json();
+      setServerOnline(true);
       if (Array.isArray(d.jobs)) {
+        const serverIds = new Set(d.jobs.map(j => j.id));
+        for (const id of Object.keys(jobData)) {
+          if (!serverIds.has(id)) {
+            delete jobData[id];
+            const el = document.getElementById('job-' + id);
+            if (el) el.remove();
+          }
+        }
         for (const j of d.jobs) {
           handleJob(j);
         }
+        renderEmpty();
+        updateCount();
       }
-    } catch(e) {}
+    } catch(e) {
+      serverFailCount++;
+      if (serverFailCount >= 2) setServerOnline(false);
+    }
   }
 
   // ── Tab Management ─────────────────────────────────────────────────────────
@@ -1911,13 +1967,15 @@
     };
 
     es.onerror = () => {
-      document.getElementById('hdrStatus').textContent = 'Reconnecting…';
+      setServerOnline(false);
       setTimeout(connectSSE, 3000);
       es.close();
     };
 
     es.onopen = () => {
-      document.getElementById('hdrStatus').textContent = 'Server Ready';
+      setServerOnline(true);
+      fetchInfo();
+      fetchJobs();
     };
   }
 

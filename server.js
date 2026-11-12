@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const crypto = require('crypto');
 const { Worker } = require('bullmq');
 
 const { redisConnection, downloadQueue, scrapeQueue, activeProcesses, isRedisReady, isRedisAlive } = require('./queue');
@@ -45,6 +46,7 @@ process.on('unhandledRejection', (reason) => {
 const YTDLP_EXE     = path.join(__dirname, 'yt-dlp.exe');
 const GALLERYDL_EXE = path.join(__dirname, 'gallery-dl.exe');
 const COOKIES       = path.join(__dirname, 'cookies.txt');
+const QUEUE_STATE_FILE = path.join(__dirname, 'queue-state.json');
 const DOWNLOAD_DIR  = path.join(os.homedir(), 'Downloads', 'yt-dlp');
 
 // Ensure download directories exist
@@ -88,10 +90,47 @@ function sanitizeFileName(name) {
     .slice(0, 120);
 }
 
+function extractOutputIdFromUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  try {
+    const u = new URL(rawUrl);
+    const segs = u.pathname.split('/').filter(Boolean);
+    // Prefer a numeric or alphanumeric media ID segment (skip generic words like 'play', 'watch', 'video')
+    const idSeg = [...segs].reverse().find(s => /^[0-9]{4,}$/.test(s))
+      || [...segs].reverse().find(s => !/^(play|watch|video|videos|embed|index)$/i.test(s) && /^[A-Za-z0-9_-]{4,24}$/.test(s));
+    if (idSeg) return idSeg;
+  } catch (_) {}
+  return crypto.createHash('sha1').update(String(rawUrl)).digest('hex').slice(0, 8);
+}
+
+let saveQueueTimer = null;
+function saveQueueStateNow() {
+  try {
+    const list = [...jobs.entries()].map(([id, j]) => ({
+      ...serializeJob(id, j),
+      mode: j.mode || 'auto',
+      useCookies: j.useCookies !== false
+    }));
+    const tmp = QUEUE_STATE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ savedAt: Date.now(), jobs: list }, null, 2), 'utf8');
+    fs.renameSync(tmp, QUEUE_STATE_FILE);
+  } catch (e) {
+    console.warn('  ⚠️ Could not persist queue state:', e.message);
+  }
+}
+
+function scheduleSaveQueueState() {
+  if (saveQueueTimer) clearTimeout(saveQueueTimer);
+  saveQueueTimer = setTimeout(() => {
+    saveQueueTimer = null;
+    saveQueueStateNow();
+  }, 250);
+}
+
 // ── yt-dlp Worker Handler ────────────────────────────────────────────────────
 function runYtdlpDownload(job) {
   return new Promise((resolve, reject) => {
-    const { url, resolvedHeaders, customOutputTitle, useCookies = true, abortSignal = null } = job.data;
+    const { url, resolvedHeaders, customOutputTitle, customOutputId, useCookies = true, abortSignal = null } = job.data;
     const id = job.id;
 
     if (abortSignal && abortSignal.aborted) {
@@ -106,8 +145,9 @@ function runYtdlpDownload(job) {
     }
 
     const safeCustomTitle = sanitizeFileName(customOutputTitle);
+    const safeCustomId = sanitizeFileName(customOutputId);
     const outTemplate = safeCustomTitle
-      ? path.join(DOWNLOAD_DIR, `${safeCustomTitle} [%(id)s].%(ext)s`)
+      ? path.join(DOWNLOAD_DIR, `${safeCustomTitle} [${safeCustomId || '%(id)s'}].%(ext)s`)
       : path.join(DOWNLOAD_DIR, '%(title)s [%(id)s].%(ext)s');
 
     const args = [
@@ -342,6 +382,7 @@ downloadWorker.on('completed', (job, result) => {
       j.log = 'Download complete. File saved to Downloads/yt-dlp/';
     }
     broadcast({ type: 'job', ...j });
+    scheduleSaveQueueState();
   }
 });
 
@@ -352,6 +393,7 @@ downloadWorker.on('failed', (job, err) => {
     j.error = err.message || 'Download failed';
     j.log = 'Failed: ' + (err.message || 'Error occurred');
     broadcast({ type: 'job', ...j });
+    scheduleSaveQueueState();
   }
 });
 
@@ -402,6 +444,7 @@ async function runScrapeJob(job) {
       j.stage = 'downloading';
       j.log = `Stream link captured via ${sniffed.via || 'browser'}! Starting yt-dlp download...`;
       broadcast({ type: 'job', ...j });
+      scheduleSaveQueueState();
     }
 
     const result = await runYtdlpDownload({
@@ -410,6 +453,7 @@ async function runScrapeJob(job) {
         url: sniffed.mediaUrl,
         title: resolvedTitle,
         customOutputTitle: resolvedTitle,
+        customOutputId: extractOutputIdFromUrl(pageUrl),
         useCookies,
         abortSignal: controller.signal,
         resolvedHeaders: {
@@ -447,6 +491,7 @@ scrapeWorker.on('completed', (job, result) => {
     if (result && result.streamUrl) j.streamUrl = result.streamUrl;
     j.log = 'Download complete. File saved to Downloads/yt-dlp/';
     broadcast({ type: 'job', ...j });
+    scheduleSaveQueueState();
   }
 });
 
@@ -458,6 +503,7 @@ scrapeWorker.on('failed', (job, err) => {
     j.error = err.message || 'Scrape download failed';
     j.log = 'Failed: ' + (err.message || 'Error occurred');
     broadcast({ type: 'job', ...j });
+    scheduleSaveQueueState();
   }
 });
 
@@ -823,6 +869,7 @@ app.post('/cancel/:id', async (req, res) => {
 
   if (job) {
     broadcast({ type: 'job', ...job });
+    scheduleSaveQueueState();
   }
 
   res.json({ ok: true });
@@ -838,6 +885,7 @@ app.delete('/job/:id', async (req, res) => {
   await removeFromBullQueues(id);
 
   jobs.delete(id);
+  saveQueueStateNow();
   broadcast({ type: 'job_removed', id });
   res.json({ ok: true });
 });
@@ -864,6 +912,7 @@ app.post('/clear', async (_req, res) => {
     } catch (_) {}
   }
 
+  saveQueueStateNow();
   broadcast({ type: 'cleared' });
   res.json({ ok: true });
 });
@@ -905,9 +954,10 @@ app.post('/clear-all', async (_req, res) => {
     }
   }
 
-  // 3. Clear in-memory jobs completely
+  // 3. Clear in-memory jobs completely & persist empty state
   const totalCleared = jobs.size;
   jobs.clear();
+  saveQueueStateNow();
 
   // 4. Broadcast full wipe to all clients
   broadcast({ type: 'cleared_all' });
@@ -993,6 +1043,66 @@ app.post('/scraper/push-scan', (req, res) => {
   res.json({ ok: true, count: items.length });
 });
 
+async function scheduleScrapeExecution(jobData, redisOk) {
+  const { id, url: pageUrl, title, mode = 'auto', useCookies = true } = jobData;
+  const myGen = scrapeGeneration;
+
+  const runDirectSequential = () => {
+    directScrapeChain = directScrapeChain
+      .catch(() => {})
+      .then(async () => {
+        if (myGen !== scrapeGeneration) return;
+        const current = jobs.get(id);
+        if (!current || current.status === 'cancelled') return;
+        try {
+          const result = await runScrapeJob({
+            id,
+            data: { pageUrl, title, mode, useCookies }
+          });
+          current.status = 'done';
+          current.stage = 'done';
+          current.progress = 100;
+          if (result && result.title) current.title = result.title;
+          if (result && result.streamUrl) current.streamUrl = result.streamUrl;
+          current.log = 'Download complete. File saved to Downloads/yt-dlp/';
+          broadcast({ type: 'job', ...current });
+          scheduleSaveQueueState();
+        } catch (err) {
+          if (current.status !== 'cancelled') {
+            current.status = 'error';
+            current.stage = 'error';
+            current.error = err.message || 'Scrape download failed';
+            current.log = 'Failed: ' + (err.message || 'Error occurred');
+            broadcast({ type: 'job', ...current });
+            scheduleSaveQueueState();
+          }
+        }
+      });
+  };
+
+  if (redisOk) {
+    try {
+      const existingBull = await scrapeQueue.getJob(id).catch(() => null);
+      if (!existingBull) {
+        await Promise.race([
+          scrapeQueue.add('web_scrape', {
+            type: 'web_scrape',
+            pageUrl,
+            title,
+            mode,
+            useCookies
+          }, { jobId: id }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+        ]);
+      }
+      return;
+    } catch (err) {
+      console.warn('⚠️ BullMQ add error for scraper, running sequential fallback:', err.message);
+    }
+  }
+  runDirectSequential();
+}
+
 async function enqueueScrapeJob({ pageUrl, title, mode, useCookies, queueIndex, queueTotal, redisOk }) {
   const id = `scr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const jobData = {
@@ -1015,60 +1125,61 @@ async function enqueueScrapeJob({ pageUrl, title, mode, useCookies, queueIndex, 
 
   jobs.set(id, jobData);
   broadcast({ type: 'job', ...jobData });
-
-  const myGen = scrapeGeneration;
-  const runDirectSequential = () => {
-    directScrapeChain = directScrapeChain
-      .catch(() => {})
-      .then(async () => {
-        if (myGen !== scrapeGeneration) return;
-        const current = jobs.get(id);
-        if (!current || current.status === 'cancelled') return;
-        try {
-          const result = await runScrapeJob({
-            id,
-            data: { pageUrl, title, mode, useCookies }
-          });
-          current.status = 'done';
-          current.stage = 'done';
-          current.progress = 100;
-          if (result && result.title) current.title = result.title;
-          if (result && result.streamUrl) current.streamUrl = result.streamUrl;
-          current.log = 'Download complete. File saved to Downloads/yt-dlp/';
-          broadcast({ type: 'job', ...current });
-        } catch (err) {
-          if (current.status !== 'cancelled') {
-            current.status = 'error';
-            current.stage = 'error';
-            current.error = err.message || 'Scrape download failed';
-            current.log = 'Failed: ' + (err.message || 'Error occurred');
-            broadcast({ type: 'job', ...current });
-          }
-        }
-      });
-  };
-
-  if (redisOk) {
-    try {
-      await Promise.race([
-        scrapeQueue.add('web_scrape', {
-          type: 'web_scrape',
-          pageUrl,
-          title,
-          mode,
-          useCookies
-        }, { jobId: id }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
-      ]);
-    } catch (err) {
-      console.warn('⚠️ BullMQ add error for scraper, running sequential fallback:', err.message);
-      runDirectSequential();
-    }
-  } else {
-    runDirectSequential();
-  }
+  scheduleSaveQueueState();
+  await scheduleScrapeExecution(jobData, redisOk);
 
   return jobData;
+}
+
+async function restoreQueueState() {
+  if (!fs.existsSync(QUEUE_STATE_FILE)) return;
+  try {
+    const raw = fs.readFileSync(QUEUE_STATE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.jobs) || parsed.jobs.length === 0) return;
+
+    const redisOk = await isRedisAlive();
+    let restoredActive = 0;
+
+    for (const saved of parsed.jobs) {
+      if (!saved || !saved.id || !saved.url) continue;
+      const wasActiveOrQueued = saved.status === 'queued' || saved.status === 'downloading';
+
+      const jobData = {
+        id: saved.id,
+        type: saved.type || 'standard',
+        url: saved.url,
+        status: wasActiveOrQueued ? (saved.type === 'web_scrape' ? 'queued' : 'error') : saved.status,
+        stage: wasActiveOrQueued ? (saved.type === 'web_scrape' ? 'queued' : 'error') : (saved.stage || saved.status),
+        progress: wasActiveOrQueued ? 0 : (saved.progress || 0),
+        title: saved.title || saved.url,
+        error: wasActiveOrQueued && saved.type !== 'web_scrape' ? 'Server restarted while job was in progress.' : (saved.error || ''),
+        log: wasActiveOrQueued
+          ? (saved.type === 'web_scrape' ? 'Restored after restart — queued for 1-by-1 resume...' : 'Interrupted by server restart.')
+          : (saved.log || ''),
+        badge: saved.badge || 'Video Download',
+        streamUrl: saved.streamUrl || '',
+        queueIndex: saved.queueIndex || null,
+        queueTotal: saved.queueTotal || null,
+        mode: saved.mode || 'auto',
+        useCookies: saved.useCookies !== false
+      };
+
+      jobs.set(jobData.id, jobData);
+
+      if (wasActiveOrQueued && jobData.type === 'web_scrape') {
+        restoredActive++;
+        await scheduleScrapeExecution(jobData, redisOk);
+      }
+    }
+
+    if (jobs.size > 0) {
+      console.log(`  ♻️  Restored ${jobs.size} job(s) from queue-state.json (${restoredActive} pending scrape job(s) resumed)`);
+      scheduleSaveQueueState();
+    }
+  } catch (e) {
+    console.warn('  ⚠️ Could not restore queue state:', e.message);
+  }
 }
 
 app.post('/scraper/download', async (req, res) => {
@@ -1219,4 +1330,5 @@ app.listen(PORT, () => {
   console.log(`  📁  Downloads → ${DOWNLOAD_DIR}`);
   console.log(`  📸  Instagram Profile Downloads → ${IG_DOWNLOAD_DIR}`);
   console.log(`  ======================================================\n`);
+  restoreQueueState();
 });
