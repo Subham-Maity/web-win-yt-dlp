@@ -955,6 +955,120 @@
       background: linear-gradient(90deg, #06b6d4, #10b981);
     }
 
+    .progress-bar-fill.sniffing {
+      width: 45% !important;
+      background: linear-gradient(90deg, #06b6d4, #6366f1, #10b981);
+      animation: sniffSlide 1.3s ease-in-out infinite;
+    }
+
+    @keyframes sniffSlide {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(260%); }
+    }
+
+    .badge-index-pill {
+      background: rgba(148, 163, 184, 0.14);
+      color: #e2e8f0;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .queue-summary-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+      padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+
+    .queue-summary-bar.active {
+      display: flex;
+    }
+
+    .summary-chip {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 99px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .summary-chip.working { color: #67e8f9; border-color: rgba(6, 182, 212, 0.35); background: rgba(6, 182, 212, 0.1); }
+    .summary-chip.queued  { color: #fcd34d; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.08); }
+    .summary-chip.done    { color: #6ee7b7; border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.1); }
+    .summary-chip.failed  { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); }
+
+    .stream-link-box {
+      margin-top: 10px;
+      background: rgba(6, 182, 212, 0.06);
+      border: 1px solid rgba(6, 182, 212, 0.25);
+      border-radius: 8px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.74rem;
+    }
+
+    .stream-link-label {
+      color: #67e8f9;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .stream-link-url {
+      flex: 1;
+      min-width: 0;
+      color: #cbd5e1;
+      font-family: 'JetBrains Mono', monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stream-copy-btn {
+      background: rgba(6, 182, 212, 0.16);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      color: #67e8f9;
+      border-radius: 6px;
+      padding: 3px 9px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .stream-copy-btn:hover {
+      background: rgba(6, 182, 212, 0.28);
+      color: #fff;
+    }
+
+    .btn-retry-job {
+      background: rgba(6, 182, 212, 0.14);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      color: #67e8f9;
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-left: auto;
+    }
+
+    .btn-retry-job:hover {
+      background: rgba(6, 182, 212, 0.28);
+      color: #fff;
+    }
+
     .job-pct {
       font-size: 0.78rem;
       color: var(--muted);
@@ -1481,6 +1595,8 @@
       </div>
     </div>
 
+    <div class="queue-summary-bar" id="queueSummaryBar"></div>
+
     <div class="job-list" id="jobList">
       <div class="empty-state" id="emptyState">
         <div class="icon">📭</div>
@@ -1730,7 +1846,7 @@
       } else if (msg.type === 'job') {
         handleJob(msg);
       } else if (msg.type === 'progress') {
-        updateProgress(msg.id, msg.progress, msg.title, msg.log, msg.status);
+        updateProgress(msg.id, msg.progress, msg.title, msg.log, msg.status, msg.stage);
       } else if (msg.type === 'cleared') {
         for (const id in jobData) {
           if (['done','error','cancelled'].includes(jobData[id].status)) {
@@ -1812,27 +1928,34 @@
       : j.type === 'web_scrape'
         ? 'Webpage Scraper (1-by-1)'
         : 'Video Download';
+    const prev = jobData[j.id] || {};
     jobData[j.id] = {
       id: j.id,
-      type: j.type || 'standard',
-      url: j.url,
+      type: j.type || prev.type || 'standard',
+      url: j.url || prev.url,
       status: j.status || 'queued',
-      progress: j.progress || 0,
-      title: j.title || j.url,
+      stage: j.stage || j.status || prev.stage || 'queued',
+      progress: j.progress !== undefined ? j.progress : (prev.progress || 0),
+      title: j.title || prev.title || j.url,
       error: j.error || '',
       log: j.log || '',
-      badge: j.badge || defaultBadge
+      badge: j.badge || prev.badge || defaultBadge,
+      streamUrl: j.streamUrl || prev.streamUrl || '',
+      queueIndex: j.queueIndex || prev.queueIndex || null,
+      queueTotal: j.queueTotal || prev.queueTotal || null
     };
     upsertJobCard(j.id);
     updateCount();
   }
 
-  function updateProgress(id, pct, title, log, status) {
+  function updateProgress(id, pct, title, log, status, stage) {
     if (!jobData[id]) return;
     
-    const wasQueued = jobData[id].status === 'queued';
+    const wasQueued = jobData[id].status === 'queued' || jobData[id].stage === 'sniffing';
     if (status) jobData[id].status = status;
-    else if (wasQueued) jobData[id].status = 'downloading';
+    else if (jobData[id].status === 'queued') jobData[id].status = 'downloading';
+    if (stage) jobData[id].stage = stage;
+    else if (pct > 0) jobData[id].stage = 'downloading';
 
     if (pct !== undefined && pct !== null) jobData[id].progress = pct;
     if (title) jobData[id].title = title;
@@ -1856,10 +1979,18 @@
     const titleEl = document.getElementById('title-' + id);
     const logEl = document.getElementById('log-' + id);
     
-    if (fill) fill.style.width = jobData[id].progress + '%';
-    if (pctEl) pctEl.textContent = jobData[id].progress.toFixed(0) + '%';
+    if (fill) {
+      if (jobData[id].stage === 'sniffing' && (!pct || pct === 0)) {
+        fill.classList.add('sniffing');
+      } else {
+        fill.classList.remove('sniffing');
+        fill.style.width = jobData[id].progress + '%';
+      }
+    }
+    if (pctEl) pctEl.textContent = (jobData[id].stage === 'sniffing' && jobData[id].progress === 0) ? '…' : (jobData[id].progress.toFixed(0) + '%');
     if (titleEl && title) titleEl.textContent = title;
     if (logEl && log) logEl.textContent = log;
+    updateCount();
   }
 
   // ── Upsert Job Card in DOM ──────────────────────────────────────────────────
@@ -1875,9 +2006,18 @@
     const icon = icons[j.status] || activeIcon;
     const displayTitle = j.title || j.url;
     const isActive = j.status === 'downloading' || j.status === 'queued';
+    const indexPillHtml = j.queueIndex
+      ? `<span class="badge-pill badge-index-pill">#${j.queueIndex}${j.queueTotal ? ' / ' + j.queueTotal : ''}</span>`
+      : '';
 
     if (existing) {
       existing.className = `job-card ${typeClass}${j.status}`;
+      const badgesEl = existing.querySelector('.job-badges');
+      if (badgesEl) {
+        const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : 'badge-std-pill';
+        const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : 'Video Download');
+        badgesEl.innerHTML = `${indexPillHtml}<span class="badge-pill ${badgeClass}">${badgeText}</span>`;
+      }
       const statusArea = existing.querySelector('.job-status-area');
       if (statusArea) statusArea.innerHTML = renderStatusArea(id, j);
       const iconEl = existing.querySelector('.job-icon');
@@ -1904,6 +2044,7 @@
           <div class="job-icon">${icon}</div>
           <div class="job-info">
             <div class="job-badges">
+              ${indexPillHtml}
               <span class="badge-pill ${badgeClass}">${badgeText}</span>
             </div>
             <div class="job-title" id="title-${id}">${escHtml(displayTitle)}</div>
@@ -1924,10 +2065,22 @@
     }
   }
 
+  function renderStreamLinkBox(id, j) {
+    if (!j.streamUrl) return '';
+    return `
+      <div class="stream-link-box">
+        <span class="stream-link-label">🔗 Stream Link:</span>
+        <span class="stream-link-url" title="${escHtml(j.streamUrl)}">${escHtml(j.streamUrl)}</span>
+        <button class="stream-copy-btn" type="button" onclick="copyStreamUrl('${id}')">📋 Copy</button>
+      </div>
+    `;
+  }
+
   function renderStatusArea(id, j) {
     const isIg = j.type === 'instagram_profile';
     const isScr = j.type === 'web_scrape';
     const logText = j.log || (j.status === 'queued' ? 'Waiting for BullMQ worker slot...' : 'Processing...');
+    const streamHtml = renderStreamLinkBox(id, j);
 
     if (j.status === 'done') {
       return `
@@ -1935,6 +2088,7 @@
           <span class="status-badge status-done">✓ Finished & Saved</span>
           <small style="color:var(--muted); font-size:0.75rem;">Saved to Downloads/yt-dlp</small>
         </div>
+        ${streamHtml}
         <div class="job-terminal">
           <span class="term-prompt">❯</span>
           <span class="term-log" id="log-${id}">${escHtml(j.log || 'Download finished successfully.')}</span>
@@ -1943,10 +2097,15 @@
     }
 
     if (j.status === 'error') {
+      const retryBtn = isScr
+        ? `<button class="btn-retry-job" type="button" onclick="retryScrapeJob('${id}')">↻ Retry</button>`
+        : '';
       return `
         <div class="job-meta-status">
           <span class="status-badge status-error">✕ Download Failed</span>
+          ${retryBtn}
         </div>
+        ${streamHtml}
         <div class="job-error-box">
           <strong>Error Details:</strong>
           ${escHtml(j.error || 'Unknown error occurred')}
@@ -1959,6 +2118,7 @@
         <div class="job-meta-status">
           <span class="status-badge status-cancelled">⛔ Cancelled</span>
         </div>
+        ${streamHtml}
       `;
     }
 
@@ -1975,19 +2135,29 @@
       `;
     }
 
-    // downloading
-    const fillClass = isIg ? 'ig-fill' : isScr ? 'scr-fill' : '';
-    const statusLabel = isIg ? 'Scraping & Downloading' : isScr ? 'Sniffing & Downloading' : 'Downloading';
+    // downloading or sniffing
+    const isSniffing = isScr && j.stage === 'sniffing' && (!j.progress || j.progress === 0);
+    const fillClass = isSniffing ? 'sniffing' : (isIg ? 'ig-fill' : isScr ? 'scr-fill' : '');
+    const statusLabel = isSniffing
+      ? 'Auto-Playing & Capturing Link'
+      : isIg
+        ? 'Scraping & Downloading'
+        : isScr
+          ? 'Downloading Stream'
+          : 'Downloading';
+    const pctText = isSniffing ? '…' : `${(j.progress || 0).toFixed(0)}%`;
+
     return `
       <div class="job-status-row">
         <div class="progress-bar-wrap">
-          <div class="progress-bar-fill ${fillClass}" id="fill-${id}" style="width:${j.progress}%"></div>
+          <div class="progress-bar-fill ${fillClass}" id="fill-${id}" style="width:${j.progress || 0}%"></div>
         </div>
-        <div class="job-pct" id="pct-${id}">${(j.progress || 0).toFixed(0)}%</div>
+        <div class="job-pct" id="pct-${id}">${pctText}</div>
       </div>
       <div class="job-meta-status">
         <span class="status-badge status-downloading">⚡ ${statusLabel}</span>
       </div>
+      ${streamHtml}
       <div class="job-terminal">
         <span class="term-prompt">❯</span>
         <span class="term-log" id="log-${id}">${escHtml(logText)}</span>
@@ -2250,8 +2420,57 @@
   }
 
   function updateCount() {
-    const total = Object.keys(jobData).length;
+    const all = Object.values(jobData);
+    const total = all.length;
     document.getElementById('queueCount').textContent = `${total} item${total !== 1 ? 's' : ''}`;
+
+    const bar = document.getElementById('queueSummaryBar');
+    if (!bar) return;
+    if (total === 0) {
+      bar.classList.remove('active');
+      bar.innerHTML = '';
+      return;
+    }
+
+    const working = all.filter(j => j.status === 'downloading');
+    const queued  = all.filter(j => j.status === 'queued');
+    const done    = all.filter(j => j.status === 'done');
+    const failed  = all.filter(j => j.status === 'error');
+
+    const activeLabel = working.length > 0
+      ? (working[0].queueIndex ? `#${working[0].queueIndex}${working[0].queueTotal ? '/' + working[0].queueTotal : ''}` : `${working.length} active`)
+      : '0';
+
+    bar.classList.add('active');
+    bar.innerHTML = `
+      <span class="summary-chip working">⚡ Working: <strong>${activeLabel}</strong></span>
+      <span class="summary-chip queued">🕐 Queued: <strong>${queued.length}</strong></span>
+      <span class="summary-chip done">✅ Done: <strong>${done.length}</strong></span>
+      <span class="summary-chip failed">❌ Failed: <strong>${failed.length}</strong></span>
+    `;
+  }
+
+  async function copyStreamUrl(id) {
+    const j = jobData[id];
+    if (!j || !j.streamUrl) return;
+    try {
+      await navigator.clipboard.writeText(j.streamUrl);
+      toast('📋 Copied captured stream download link!');
+    } catch (e) {
+      toast('⚠️ Copy failed: ' + e.message);
+    }
+  }
+
+  async function retryScrapeJob(id) {
+    try {
+      const r = await fetch('/scraper/retry/' + encodeURIComponent(id), { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Retry failed');
+      if (d.job) handleJob(d.job);
+      toast('↻ Re-queued job for 1-by-1 download!');
+    } catch (e) {
+      toast('❌ ' + e.message);
+    }
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────

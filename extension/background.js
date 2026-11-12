@@ -80,13 +80,18 @@ function extractVideosFromDom() {
     let title = cleanText(
       a.getAttribute('title') ||
       (img && (img.getAttribute('alt') || img.getAttribute('title'))) ||
-      a.textContent ||
       ''
     );
 
+    if (!title || title.length < 4) {
+      const heading = card.querySelector('h1,h2,h3,h4,.title,[class*="title"],[class*="caption"],[class*="desc"],[class*="name"]');
+      const headingTxt = heading ? cleanText(heading.textContent) : '';
+      const anchorTxt = cleanText(a.textContent || '');
+      if (headingTxt.length > title.length) title = headingTxt;
+      else if (anchorTxt.length > title.length) title = anchorTxt;
+    }
     if (!title || title.length < 2) {
-      const heading = card.querySelector('h1,h2,h3,h4,.title,[class*="title"],[class*="name"]');
-      if (heading) title = cleanText(heading.textContent);
+      title = cleanText(a.textContent || '');
     }
     if (duration && title && title.startsWith(duration)) {
       title = cleanText(title.slice(duration.length));
@@ -294,29 +299,64 @@ async function handleSniffTask(url) {
     }, 35000);
 
     playInterval = setInterval(async () => {
-      if (settled) return;
+      if (settled || bestCandidate) return;
       try {
-        const [{ result: domSrc }] = await chrome.scripting.executeScript({
-          target: { tabId },
+        const results = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
           func: () => {
             let found = '';
             document.querySelectorAll('video, audio').forEach(el => {
               el.muted = true;
               el.volume = 0;
               if (el.tagName === 'VIDEO') {
-                if (el.paused) el.play().catch(() => {});
+                if (el.paused) {
+                  try { el.play().catch(() => {}); } catch (_) {}
+                  try {
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                  } catch (_) {}
+                }
                 const s = el.currentSrc || el.getAttribute('src') || '';
                 if (s && !s.startsWith('blob:')) found = s;
               }
             });
-            const playBtn = document.querySelector('.vjs-big-play-button, .plyr__control--overlaid, [class*="play-btn"], button[aria-label*="Play" i]');
-            if (playBtn) { try { playBtn.click(); } catch (_) {} }
+
+            const playSelectors = [
+              '.vjs-big-play-button',
+              '.plyr__control--overlaid',
+              '.jw-icon-display',
+              '.fp-play',
+              'button[aria-label*="Play" i]',
+              '[role="button"][aria-label*="Play" i]',
+              '[title*="Play" i]',
+              '[class*="play-btn" i]',
+              '[class*="play-button" i]',
+              '[class*="playIcon" i]',
+              '[class*="play_btn" i]',
+              '[data-action="play"]'
+            ];
+            for (const sel of playSelectors) {
+              document.querySelectorAll(sel).forEach(btn => {
+                const r = btn.getBoundingClientRect();
+                if (r.width > 8 && r.height > 8) {
+                  try {
+                    btn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+                    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                    btn.click();
+                  } catch (_) {}
+                }
+              });
+            }
             return found;
           }
         });
-        if (domSrc) consider(domSrc, '', { referer: url });
+        for (const frameRes of (results || [])) {
+          if (frameRes && frameRes.result) {
+            consider(frameRes.result, '', { referer: url });
+          }
+        }
       } catch (_) {}
-    }, 1500);
+    }, 1400);
 
     chrome.tabs.update(tabId, { url }).catch((err) => {
       if (!settled) {
@@ -416,3 +456,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 pollLoop();
+

@@ -523,13 +523,18 @@ const DOM_VIDEO_EXTRACTOR_SCRIPT = `(() => {
     let title = cleanText(
       a.getAttribute('title') ||
       (img && (img.getAttribute('alt') || img.getAttribute('title'))) ||
-      a.textContent ||
       ''
     );
 
+    if (!title || title.length < 4) {
+      const heading = card.querySelector('h1,h2,h3,h4,.title,[class*="title"],[class*="caption"],[class*="desc"],[class*="name"]');
+      const headingTxt = heading ? cleanText(heading.textContent) : '';
+      const anchorTxt = cleanText(a.textContent || '');
+      if (headingTxt.length > title.length) title = headingTxt;
+      else if (anchorTxt.length > title.length) title = anchorTxt;
+    }
     if (!title || title.length < 2) {
-      const heading = card.querySelector('h1,h2,h3,h4,.title,[class*="title"],[class*="name"]');
-      if (heading) title = cleanText(heading.textContent);
+      title = cleanText(a.textContent || '');
     }
     if (duration && title && title.startsWith(duration)) {
       title = cleanText(title.slice(duration.length));
@@ -806,32 +811,107 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
         } catch (_) {}
       });
 
-      // Periodically mute & encourage video playback + inspect DOM <video> src fallback
+      // Periodically mute, auto-click Play (trusted CDP mouse click + DOM play), & inspect <video> src
+      let autoClickCount = 0;
       playInterval = setInterval(async () => {
-        if (settled) return;
+        if (settled || bestCandidate) return;
         try {
           const evalOut = await sendCdpCommand(pageWs, ++cmdId, 'Runtime.evaluate', {
             expression: `(() => {
               let foundSrc = '';
-              document.querySelectorAll('video, audio').forEach(el => {
-                el.muted = true;
-                el.volume = 0;
-                if (el.tagName === 'VIDEO') {
-                  if (el.paused) el.play().catch(() => {});
-                  const s = el.currentSrc || el.getAttribute('src') || '';
-                  if (s && !s.startsWith('blob:')) foundSrc = s;
+              let clickPoint = null;
+
+              function scanDoc(doc, offsetX = 0, offsetY = 0) {
+                if (!doc) return;
+                doc.querySelectorAll('video, audio').forEach(el => {
+                  el.muted = true;
+                  el.volume = 0;
+                  if (el.tagName === 'VIDEO') {
+                    if (el.paused) {
+                      try { el.play().catch(() => {}); } catch (_) {}
+                    }
+                    const s = el.currentSrc || el.getAttribute('src') || '';
+                    if (s && !s.startsWith('blob:')) foundSrc = s;
+                    if (!clickPoint) {
+                      const r = el.getBoundingClientRect();
+                      if (r.width >= 100 && r.height >= 80 && r.bottom > 0 && r.right > 0) {
+                        clickPoint = {
+                          x: Math.round(offsetX + r.left + r.width / 2),
+                          y: Math.round(offsetY + r.top + r.height / 2)
+                        };
+                      }
+                    }
+                  }
+                });
+
+                const playSelectors = [
+                  '.vjs-big-play-button',
+                  '.plyr__control--overlaid',
+                  '.jw-icon-display',
+                  '.fp-play',
+                  'button[aria-label*="Play" i]',
+                  '[role="button"][aria-label*="Play" i]',
+                  '[title*="Play" i]',
+                  '[class*="play-btn" i]',
+                  '[class*="play-button" i]',
+                  '[class*="playIcon" i]',
+                  '[class*="play_btn" i]',
+                  '[data-action="play"]'
+                ];
+                for (const sel of playSelectors) {
+                  const btns = doc.querySelectorAll(sel);
+                  for (const btn of btns) {
+                    const r = btn.getBoundingClientRect();
+                    if (r.width > 8 && r.height > 8 && r.bottom > 0 && r.right > 0) {
+                      const style = doc.defaultView ? doc.defaultView.getComputedStyle(btn) : null;
+                      if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) continue;
+                      try { btn.click(); } catch (_) {}
+                      clickPoint = {
+                        x: Math.round(offsetX + r.left + r.width / 2),
+                        y: Math.round(offsetY + r.top + r.height / 2)
+                      };
+                      break;
+                    }
+                  }
+                  if (clickPoint) break;
                 }
+              }
+
+              scanDoc(document, 0, 0);
+              document.querySelectorAll('iframe').forEach(ifr => {
+                try {
+                  const ir = ifr.getBoundingClientRect();
+                  if (ifr.contentDocument) {
+                    scanDoc(ifr.contentDocument, ir.left, ir.top);
+                  } else if (!clickPoint && ir.width >= 180 && ir.height >= 120) {
+                    clickPoint = {
+                      x: Math.round(ir.left + ir.width / 2),
+                      y: Math.round(ir.top + ir.height / 2)
+                    };
+                  }
+                } catch (_) {}
               });
-              const playBtn = document.querySelector('.vjs-big-play-button, .plyr__control--overlaid, [class*="play-btn"], button[aria-label*="Play" i]');
-              if (playBtn) { try { playBtn.click(); } catch (_) {} }
-              return foundSrc;
+
+              return { foundSrc, clickPoint };
             })()`,
             returnByValue: true
           });
-          const domSrc = evalOut && evalOut.result && evalOut.result.value;
-          if (domSrc) considerCandidate(domSrc, '', { Referer: url });
+
+          const val = evalOut && evalOut.result && evalOut.result.value;
+          if (val && val.foundSrc) {
+            considerCandidate(val.foundSrc, '', { Referer: url });
+          }
+          if (!bestCandidate && val && val.clickPoint && autoClickCount < 4) {
+            autoClickCount++;
+            const { x, y } = val.clickPoint;
+            if (x > 0 && y > 0) {
+              await sendCdpCommand(pageWs, ++cmdId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }).catch(() => {});
+              await sendCdpCommand(pageWs, ++cmdId, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => {});
+              await sendCdpCommand(pageWs, ++cmdId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => {});
+            }
+          }
         } catch (_) {}
-      }, 1500);
+      }, 1400);
 
       sendCdpCommand(pageWs, ++cmdId, 'Page.navigate', { url }).catch(fail);
     });
@@ -910,3 +990,4 @@ module.exports = {
   scanWebpage,
   sniffMediaStream
 };
+

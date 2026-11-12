@@ -160,7 +160,10 @@ function runYtdlpDownload(job) {
             const num = parseFloat(pct.replace('%', ''));
             if (!isNaN(num)) {
               progress = num;
-              if (extractedTitle && extractedTitle !== 'NA') title = extractedTitle;
+              const isGenericTitle = !extractedTitle || extractedTitle === 'NA' || /^(index|master|playlist|chunklist|video|stream)$/i.test(extractedTitle.trim());
+              if (!customOutputTitle && !isGenericTitle) {
+                title = extractedTitle;
+              }
               let logMsg = `Speed: ${speed || 'N/A'} • ETA: ${eta || 'N/A'}`;
               if (job && typeof job.updateProgress === 'function') {
                 try { job.updateProgress({ progress, title, log: logMsg }); } catch (_) {}
@@ -171,8 +174,9 @@ function runYtdlpDownload(job) {
                 item.title = title;
                 item.log = logMsg;
                 item.status = 'downloading';
+                item.stage = 'downloading';
               }
-              broadcast({ type: 'progress', id, status: 'downloading', progress, title, log: logMsg });
+              broadcast({ type: 'progress', id, status: 'downloading', stage: 'downloading', progress, title, log: logMsg });
               continue;
             }
           }
@@ -188,16 +192,18 @@ function runYtdlpDownload(job) {
             item.progress = progress;
             item.log = trimmed;
             item.status = 'downloading';
+            item.stage = 'downloading';
           }
-          broadcast({ type: 'progress', id, status: 'downloading', progress, title: item ? item.title : title, log: trimmed });
+          broadcast({ type: 'progress', id, status: 'downloading', stage: 'downloading', progress, title: item ? item.title : title, log: trimmed });
         } else {
           // General informational line (e.g. "[info] Extracting URL: ...")
           const item = jobs.get(id);
           if (item) {
             item.log = trimmed;
             item.status = 'downloading';
+            item.stage = 'downloading';
           }
-          broadcast({ type: 'progress', id, status: 'downloading', progress, title: item ? item.title : title, log: trimmed });
+          broadcast({ type: 'progress', id, status: 'downloading', stage: 'downloading', progress, title: item ? item.title : title, log: trimmed });
         }
       }
     });
@@ -345,7 +351,8 @@ async function runScrapeJob(job) {
   try {
     if (j) {
       j.status = 'downloading';
-      j.log = 'Opening video in background browser to capture stream...';
+      j.stage = 'sniffing';
+      j.log = 'Opening muted tab & auto-clicking Play to capture stream...';
       broadcast({ type: 'job', ...j });
     }
 
@@ -363,7 +370,9 @@ async function runScrapeJob(job) {
     const resolvedTitle = sniffed.title || presetTitle || pageUrl;
     if (j) {
       j.title = resolvedTitle;
-      j.log = `Stream captured via ${sniffed.via || 'browser'}! Starting yt-dlp...`;
+      j.streamUrl = sniffed.mediaUrl;
+      j.stage = 'downloading';
+      j.log = `Stream link captured via ${sniffed.via || 'browser'}! Starting yt-dlp download...`;
       broadcast({ type: 'job', ...j });
     }
 
@@ -384,7 +393,8 @@ async function runScrapeJob(job) {
 
     return {
       ...result,
-      title: resolvedTitle
+      title: resolvedTitle,
+      streamUrl: sniffed.mediaUrl
     };
   } finally {
     activeScrapeAborts.delete(id);
@@ -402,8 +412,10 @@ scrapeWorker.on('completed', (job, result) => {
   const j = jobs.get(job.id);
   if (j) {
     j.status = 'done';
+    j.stage = 'done';
     j.progress = 100;
     if (result && result.title) j.title = result.title;
+    if (result && result.streamUrl) j.streamUrl = result.streamUrl;
     j.log = 'Download complete. File saved to Downloads/yt-dlp/';
     broadcast({ type: 'job', ...j });
   }
@@ -413,6 +425,7 @@ scrapeWorker.on('failed', (job, err) => {
   const j = jobs.get(job.id);
   if (j && j.status !== 'cancelled') {
     j.status = 'error';
+    j.stage = 'error';
     j.error = err.message || 'Scrape download failed';
     j.log = 'Failed: ' + (err.message || 'Error occurred');
     broadcast({ type: 'job', ...j });
@@ -423,6 +436,24 @@ scrapeWorker.on('error', () => {
   // Handled silently when Redis is unavailable
 });
 
+function serializeJob(id, j) {
+  return {
+    id,
+    type: j.type,
+    url: j.url,
+    status: j.status,
+    stage: j.stage || j.status,
+    progress: j.progress,
+    title: j.title,
+    error: j.error,
+    log: j.log || '',
+    badge: j.badge,
+    streamUrl: j.streamUrl || '',
+    queueIndex: j.queueIndex || null,
+    queueTotal: j.queueTotal || null
+  };
+}
+
 // ── SSE Endpoint ─────────────────────────────────────────────────────────────
 app.get('/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -431,17 +462,7 @@ app.get('/events', (req, res) => {
   res.flushHeaders();
 
   // Send current snapshot
-  const snapshot = [...jobs.entries()].map(([id, j]) => ({
-    id,
-    type: j.type,
-    url: j.url,
-    status: j.status,
-    progress: j.progress,
-    title: j.title,
-    error: j.error,
-    log: j.log || '',
-    badge: j.badge
-  }));
+  const snapshot = [...jobs.entries()].map(([id, j]) => serializeJob(id, j));
   res.write(`data: ${JSON.stringify({ type: 'snapshot', jobs: snapshot })}\n\n`);
 
   sseClients.add(res);
@@ -723,17 +744,7 @@ app.post('/download/instagram-profile', async (req, res) => {
 
 // ── Get all jobs (Sync endpoint) ─────────────────────────────────────────────
 app.get('/jobs', (_req, res) => {
-  const list = [...jobs.entries()].map(([id, j]) => ({
-    id,
-    type: j.type,
-    url: j.url,
-    status: j.status,
-    progress: j.progress,
-    title: j.title,
-    error: j.error,
-    log: j.log || '',
-    badge: j.badge
-  }));
+  const list = [...jobs.entries()].map(([id, j]) => serializeJob(id, j));
   res.json({ jobs: list });
 });
 
@@ -951,88 +962,132 @@ app.post('/scraper/push-scan', (req, res) => {
   res.json({ ok: true, count: items.length });
 });
 
+async function enqueueScrapeJob({ pageUrl, title, mode, useCookies, queueIndex, queueTotal, redisOk }) {
+  const id = `scr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const jobData = {
+    id,
+    type: 'web_scrape',
+    url: pageUrl,
+    status: 'queued',
+    stage: 'queued',
+    progress: 0,
+    title,
+    log: `Queued (#${queueIndex} of ${queueTotal}) — waiting for 1-by-1 slot...`,
+    error: '',
+    badge: 'Webpage Scraper (1-by-1)',
+    streamUrl: '',
+    queueIndex,
+    queueTotal,
+    mode,
+    useCookies
+  };
+
+  jobs.set(id, jobData);
+  broadcast({ type: 'job', ...jobData });
+
+  const runDirectSequential = () => {
+    directScrapeChain = directScrapeChain
+      .catch(() => {})
+      .then(async () => {
+        const current = jobs.get(id);
+        if (!current || current.status === 'cancelled') return;
+        try {
+          const result = await runScrapeJob({
+            id,
+            data: { pageUrl, title, mode, useCookies }
+          });
+          current.status = 'done';
+          current.stage = 'done';
+          current.progress = 100;
+          if (result && result.title) current.title = result.title;
+          if (result && result.streamUrl) current.streamUrl = result.streamUrl;
+          current.log = 'Download complete. File saved to Downloads/yt-dlp/';
+          broadcast({ type: 'job', ...current });
+        } catch (err) {
+          if (current.status !== 'cancelled') {
+            current.status = 'error';
+            current.stage = 'error';
+            current.error = err.message || 'Scrape download failed';
+            current.log = 'Failed: ' + (err.message || 'Error occurred');
+            broadcast({ type: 'job', ...current });
+          }
+        }
+      });
+  };
+
+  if (redisOk) {
+    try {
+      await Promise.race([
+        scrapeQueue.add('web_scrape', {
+          type: 'web_scrape',
+          pageUrl,
+          title,
+          mode,
+          useCookies
+        }, { jobId: id }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+      ]);
+    } catch (err) {
+      console.warn('⚠️ BullMQ add error for scraper, running sequential fallback:', err.message);
+      runDirectSequential();
+    }
+  } else {
+    runDirectSequential();
+  }
+
+  return jobData;
+}
+
 app.post('/scraper/download', async (req, res) => {
   const { items, mode = 'auto', useCookies = true } = req.body || {};
-  if (!Array.isArray(items) || items.length === 0) {
+  const validItems = Array.isArray(items)
+    ? items.filter(it => it && typeof it.url === 'string' && it.url.trim())
+    : [];
+  if (validItems.length === 0) {
     return res.status(400).json({ error: 'Select at least one video to queue.' });
   }
 
   const started = [];
   const createdJobs = [];
   const redisOk = await isRedisAlive();
+  const queueTotal = validItems.length;
 
-  for (const item of items) {
-    const pageUrl = (item && item.url ? String(item.url) : '').trim();
-    if (!pageUrl) continue;
-
+  for (let i = 0; i < validItems.length; i++) {
+    const item = validItems[i];
+    const pageUrl = item.url.trim();
     const title = (item.title && String(item.title).trim()) || pageUrl;
-    const id = `scr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const jobData = {
-      id,
-      type: 'web_scrape',
-      url: pageUrl,
-      status: 'queued',
-      progress: 0,
+    const jobData = await enqueueScrapeJob({
+      pageUrl,
       title,
-      log: 'Queued for 1-by-1 sequential background capture...',
-      error: '',
-      badge: 'Webpage Scraper (1-by-1)'
-    };
-
-    jobs.set(id, jobData);
-    started.push(id);
+      mode,
+      useCookies,
+      queueIndex: i + 1,
+      queueTotal,
+      redisOk
+    });
+    started.push(jobData.id);
     createdJobs.push(jobData);
-    broadcast({ type: 'job', ...jobData });
-
-    const runDirectSequential = () => {
-      directScrapeChain = directScrapeChain
-        .catch(() => {})
-        .then(async () => {
-          const current = jobs.get(id);
-          if (!current || current.status === 'cancelled') return;
-          try {
-            const result = await runScrapeJob({
-              id,
-              data: { pageUrl, title, mode, useCookies }
-            });
-            current.status = 'done';
-            current.progress = 100;
-            if (result && result.title) current.title = result.title;
-            current.log = 'Download complete. File saved to Downloads/yt-dlp/';
-            broadcast({ type: 'job', ...current });
-          } catch (err) {
-            if (current.status !== 'cancelled') {
-              current.status = 'error';
-              current.error = err.message || 'Scrape download failed';
-              current.log = 'Failed: ' + (err.message || 'Error occurred');
-              broadcast({ type: 'job', ...current });
-            }
-          }
-        });
-    };
-
-    if (redisOk) {
-      try {
-        await Promise.race([
-          scrapeQueue.add('web_scrape', {
-            type: 'web_scrape',
-            pageUrl,
-            title,
-            mode,
-            useCookies
-          }, { jobId: id }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
-        ]);
-      } catch (err) {
-        console.warn('⚠️ BullMQ add error for scraper, running sequential fallback:', err.message);
-        runDirectSequential();
-      }
-    } else {
-      runDirectSequential();
-    }
   }
 
   res.json({ ok: true, started, jobs: createdJobs });
+});
+
+app.post('/scraper/retry/:id', async (req, res) => {
+  const old = jobs.get(req.params.id);
+  if (!old || old.type !== 'web_scrape') {
+    return res.status(404).json({ error: 'Scrape job not found.' });
+  }
+  const redisOk = await isRedisAlive();
+  const jobData = await enqueueScrapeJob({
+    pageUrl: old.url,
+    title: old.title || old.url,
+    mode: old.mode || 'auto',
+    useCookies: old.useCookies !== false,
+    queueIndex: old.queueIndex || 1,
+    queueTotal: old.queueTotal || 1,
+    redisOk
+  });
+  res.json({ ok: true, job: jobData });
 });
 
 app.post('/scraper/open-browser', async (req, res) => {
