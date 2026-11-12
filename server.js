@@ -47,6 +47,7 @@ const YTDLP_EXE     = path.join(__dirname, 'yt-dlp.exe');
 const GALLERYDL_EXE = path.join(__dirname, 'gallery-dl.exe');
 const COOKIES       = path.join(__dirname, 'cookies.txt');
 const QUEUE_STATE_FILE = path.join(__dirname, 'queue-state.json');
+const SCRAPE_ARCHIVE_FILE = path.join(__dirname, 'scrape-archive.json');
 const DOWNLOAD_DIR  = path.join(os.homedir(), 'Downloads', 'yt-dlp');
 
 // Ensure download directories exist
@@ -126,6 +127,118 @@ function scheduleSaveQueueState() {
     saveQueueStateNow();
   }, 250);
 }
+
+// ── Scrape Download Archive & Disk Deduplication ─────────────────────────────
+const scrapeArchive = new Map(); // key (normalized pageUrl or outputId) -> { pageUrl, outputId, title, fileName, savedAt }
+
+function normalizePageUrl(rawUrl) {
+  return String(rawUrl || '').trim().split('#')[0].replace(/\/+$/, '');
+}
+
+function loadScrapeArchive() {
+  if (!fs.existsSync(SCRAPE_ARCHIVE_FILE)) return;
+  try {
+    const data = JSON.parse(fs.readFileSync(SCRAPE_ARCHIVE_FILE, 'utf8'));
+    if (Array.isArray(data.entries)) {
+      for (const e of data.entries) {
+        if (!e) continue;
+        if (e.pageUrl) scrapeArchive.set('url:' + normalizePageUrl(e.pageUrl), e);
+        if (e.outputId) scrapeArchive.set('id:' + e.outputId, e);
+      }
+    }
+  } catch (e) {
+    console.warn('  ⚠️ Could not load scrape-archive.json:', e.message);
+  }
+}
+
+function saveScrapeArchiveNow() {
+  try {
+    const unique = new Map();
+    for (const e of scrapeArchive.values()) {
+      const k = e.outputId || normalizePageUrl(e.pageUrl);
+      if (k) unique.set(k, e);
+    }
+    const tmp = SCRAPE_ARCHIVE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ updatedAt: Date.now(), entries: Array.from(unique.values()) }, null, 2), 'utf8');
+    fs.renameSync(tmp, SCRAPE_ARCHIVE_FILE);
+  } catch (_) {}
+}
+
+function recordScrapedDownload({ pageUrl, outputId, title, fileName = '' }) {
+  const normUrl = normalizePageUrl(pageUrl);
+  const oid = outputId || extractOutputIdFromUrl(pageUrl);
+  const entry = {
+    pageUrl: normUrl,
+    outputId: oid,
+    title: title || '',
+    fileName: fileName || '',
+    savedAt: Date.now()
+  };
+  if (normUrl) scrapeArchive.set('url:' + normUrl, entry);
+  if (oid) scrapeArchive.set('id:' + oid, entry);
+  saveScrapeArchiveNow();
+}
+
+const COMPLETED_MEDIA_RE = /\.(mp4|mkv|webm|mov|m4v)$/i;
+function findExistingDownload(pageUrl, title = '') {
+  const normUrl = normalizePageUrl(pageUrl);
+  const outputId = extractOutputIdFromUrl(normUrl);
+
+  let files = [];
+  try {
+    files = fs.readdirSync(DOWNLOAD_DIR);
+  } catch (_) {
+    return null;
+  }
+
+  // If incomplete .part or .ytdl files exist for this ID, do not treat as finished
+  if (outputId) {
+    const idMarker = `[${sanitizeFileName(outputId)}]`;
+    const hasPartial = files.some(f => f.includes(idMarker) && (/\.part/i.test(f) || /\.ytdl$/i.test(f)));
+    if (hasPartial) return null;
+  }
+
+  const completedFiles = files.filter(f => {
+    if (!COMPLETED_MEDIA_RE.test(f)) return false;
+    try {
+      const st = fs.statSync(path.join(DOWNLOAD_DIR, f));
+      return st.isFile() && st.size > 102400; // > 100 KB
+    } catch (_) {
+      return false;
+    }
+  });
+
+  // 1. Exact ID match on disk: "... [<outputId>].mp4"
+  if (outputId) {
+    const idMarker = `[${sanitizeFileName(outputId)}]`;
+    const byId = completedFiles.find(f => f.includes(idMarker));
+    if (byId) return byId;
+  }
+
+  // 2. Check archive entry & confirm a corresponding file still exists on disk
+  const archived = (normUrl && scrapeArchive.get('url:' + normUrl)) || (outputId && scrapeArchive.get('id:' + outputId));
+  if (archived) {
+    if (archived.fileName && completedFiles.includes(archived.fileName)) {
+      return archived.fileName;
+    }
+    const safeArchTitle = sanitizeFileName(archived.title || '');
+    if (safeArchTitle.length >= 16) {
+      const byArchTitle = completedFiles.find(f => f.startsWith(safeArchTitle));
+      if (byArchTitle) return byArchTitle;
+    }
+  }
+
+  // 3. Fallback title prefix match on disk when descriptive title is known
+  const safeTitle = sanitizeFileName(title);
+  if (safeTitle.length >= 16) {
+    const byTitle = completedFiles.find(f => f.startsWith(safeTitle));
+    if (byTitle) return byTitle;
+  }
+
+  return null;
+}
+
+loadScrapeArchive();
 
 // ── yt-dlp Worker Handler ────────────────────────────────────────────────────
 const STREAM_EXPIRED_RE = /(HTTP Error 410|410:\s*Gone|HTTP Error 403|403:\s*Forbidden|HTTP Error 401|401:\s*Unauthorized|Unable to download fragment)/i;
@@ -504,18 +617,31 @@ let scrapeGeneration = 0;
 
 async function runScrapeJob(job) {
   const id = job.id;
-  const { pageUrl, mode = 'auto', title: presetTitle, useCookies = true } = job.data;
+  const { pageUrl, mode = 'auto', title: presetTitle, useCookies = true, skipExisting = true } = job.data;
 
   const j = jobs.get(id);
   if (j && j.status === 'cancelled') {
     throw new Error('Cancelled by user');
   }
 
+  const outputId = extractOutputIdFromUrl(pageUrl);
+  if (skipExisting) {
+    const existingFile = findExistingDownload(pageUrl, presetTitle || '');
+    if (existingFile) {
+      return {
+        title: presetTitle || pageUrl,
+        progress: 100,
+        streamUrl: (j && j.streamUrl) || '',
+        skipped: true,
+        existingFile
+      };
+    }
+  }
+
   const controller = new AbortController();
   activeScrapeAborts.set(id, controller);
 
   const MAX_REFRESH_ATTEMPTS = 5;
-  const outputId = extractOutputIdFromUrl(pageUrl);
   let forceNoContinue = false;
 
   try {
@@ -593,6 +719,14 @@ async function runScrapeJob(job) {
           }
         });
 
+        const matchedFile = findExistingDownload(pageUrl, resolvedTitle) || '';
+        recordScrapedDownload({
+          pageUrl,
+          outputId,
+          title: resolvedTitle,
+          fileName: matchedFile
+        });
+
         return {
           ...result,
           title: resolvedTitle,
@@ -628,6 +762,23 @@ async function runScrapeJob(job) {
   }
 }
 
+function applyScrapeCompletedResult(j, result) {
+  if (!j) return;
+  j.status = 'done';
+  j.stage = 'done';
+  j.progress = 100;
+  if (result && result.title) j.title = result.title;
+  if (result && result.streamUrl) j.streamUrl = result.streamUrl;
+  if (result && result.skipped) {
+    j.badge = 'Skipped (Already Downloaded)';
+    j.log = `⏭ Skipped — already exists on disk: ${result.existingFile || 'Downloaded'}`;
+  } else {
+    j.log = 'Download complete. File saved to Downloads/yt-dlp/';
+  }
+  broadcast({ type: 'job', ...j });
+  scheduleSaveQueueState();
+}
+
 const scrapeWorker = new Worker('scrapeQueue', async (job) => {
   return await runScrapeJob(job);
 }, {
@@ -636,17 +787,7 @@ const scrapeWorker = new Worker('scrapeQueue', async (job) => {
 });
 
 scrapeWorker.on('completed', (job, result) => {
-  const j = jobs.get(job.id);
-  if (j) {
-    j.status = 'done';
-    j.stage = 'done';
-    j.progress = 100;
-    if (result && result.title) j.title = result.title;
-    if (result && result.streamUrl) j.streamUrl = result.streamUrl;
-    j.log = 'Download complete. File saved to Downloads/yt-dlp/';
-    broadcast({ type: 'job', ...j });
-    scheduleSaveQueueState();
-  }
+  applyScrapeCompletedResult(jobs.get(job.id), result);
 });
 
 scrapeWorker.on('failed', (job, err) => {
@@ -1166,6 +1307,17 @@ app.get('/scraper/bridge/status', (req, res) => {
   });
 });
 
+function annotateScrapedItems(items) {
+  return (Array.isArray(items) ? items : []).map(it => {
+    const existingFile = findExistingDownload(it && it.url, it && it.title);
+    return {
+      ...it,
+      alreadyDownloaded: Boolean(existingFile),
+      existingFile: existingFile || ''
+    };
+  });
+}
+
 app.post('/scraper/scan', async (req, res) => {
   const { url, mode = 'auto' } = req.body || {};
   if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) {
@@ -1177,7 +1329,8 @@ app.post('/scraper/scan', async (req, res) => {
       mode,
       cookiesFilePath: COOKIES
     });
-    res.json({ ok: true, ...result });
+    const annotated = annotateScrapedItems(result.items);
+    res.json({ ok: true, ...result, items: annotated });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to scan webpage.' });
   }
@@ -1188,17 +1341,18 @@ app.post('/scraper/push-scan', (req, res) => {
   if (!Array.isArray(items)) {
     return res.status(400).json({ error: 'Invalid scan payload.' });
   }
+  const annotated = annotateScrapedItems(items);
   broadcast({
     type: 'scraper_scan_push',
     pageTitle: pageTitle || pageUrl || 'Scanned Webpage',
     pageUrl: pageUrl || '',
-    items
+    items: annotated
   });
-  res.json({ ok: true, count: items.length });
+  res.json({ ok: true, count: annotated.length });
 });
 
 async function scheduleScrapeExecution(jobData, redisOk) {
-  const { id, url: pageUrl, title, mode = 'auto', useCookies = true } = jobData;
+  const { id, url: pageUrl, title, mode = 'auto', useCookies = true, skipExisting = true } = jobData;
   const myGen = scrapeGeneration;
 
   const runDirectSequential = () => {
@@ -1211,16 +1365,9 @@ async function scheduleScrapeExecution(jobData, redisOk) {
         try {
           const result = await runScrapeJob({
             id,
-            data: { pageUrl, title, mode, useCookies }
+            data: { pageUrl, title, mode, useCookies, skipExisting }
           });
-          current.status = 'done';
-          current.stage = 'done';
-          current.progress = 100;
-          if (result && result.title) current.title = result.title;
-          if (result && result.streamUrl) current.streamUrl = result.streamUrl;
-          current.log = 'Download complete. File saved to Downloads/yt-dlp/';
-          broadcast({ type: 'job', ...current });
-          scheduleSaveQueueState();
+          applyScrapeCompletedResult(current, result);
         } catch (err) {
           if (current.status !== 'cancelled') {
             current.status = 'error';
@@ -1244,7 +1391,8 @@ async function scheduleScrapeExecution(jobData, redisOk) {
             pageUrl,
             title,
             mode,
-            useCookies
+            useCookies,
+            skipExisting
           }, { jobId: id }),
           new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
         ]);
@@ -1257,8 +1405,37 @@ async function scheduleScrapeExecution(jobData, redisOk) {
   runDirectSequential();
 }
 
-async function enqueueScrapeJob({ pageUrl, title, mode, useCookies, queueIndex, queueTotal, redisOk }) {
+async function enqueueScrapeJob({ pageUrl, title, mode, useCookies, skipExisting = true, queueIndex, queueTotal, redisOk }) {
   const id = `scr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  if (skipExisting) {
+    const existingFile = findExistingDownload(pageUrl, title);
+    if (existingFile) {
+      const skippedJob = {
+        id,
+        type: 'web_scrape',
+        url: pageUrl,
+        status: 'done',
+        stage: 'done',
+        progress: 100,
+        title,
+        log: `⏭ Skipped — already exists on disk: ${existingFile}`,
+        error: '',
+        badge: 'Skipped (Already Downloaded)',
+        streamUrl: '',
+        queueIndex,
+        queueTotal,
+        mode,
+        useCookies,
+        skipped: true
+      };
+      jobs.set(id, skippedJob);
+      broadcast({ type: 'job', ...skippedJob });
+      scheduleSaveQueueState();
+      return skippedJob;
+    }
+  }
+
   const jobData = {
     id,
     type: 'web_scrape',
@@ -1274,7 +1451,8 @@ async function enqueueScrapeJob({ pageUrl, title, mode, useCookies, queueIndex, 
     queueIndex,
     queueTotal,
     mode,
-    useCookies
+    useCookies,
+    skipExisting
   };
 
   jobs.set(id, jobData);
@@ -1321,6 +1499,12 @@ async function restoreQueueState() {
 
       jobs.set(jobData.id, jobData);
 
+      if (jobData.type === 'web_scrape' && jobData.status === 'done') {
+        const oid = extractOutputIdFromUrl(jobData.url);
+        const diskFile = findExistingDownload(jobData.url, jobData.title);
+        recordScrapedDownload({ pageUrl: jobData.url, outputId: oid, title: jobData.title, fileName: diskFile || '' });
+      }
+
       if (wasActiveOrQueued && jobData.type === 'web_scrape') {
         restoredActive++;
         await scheduleScrapeExecution(jobData, redisOk);
@@ -1337,7 +1521,7 @@ async function restoreQueueState() {
 }
 
 app.post('/scraper/download', async (req, res) => {
-  const { items, mode = 'auto', useCookies = true } = req.body || {};
+  const { items, mode = 'auto', useCookies = true, skipExisting = true } = req.body || {};
   const validItems = Array.isArray(items)
     ? items.filter(it => it && typeof it.url === 'string' && it.url.trim())
     : [];
@@ -1347,6 +1531,7 @@ app.post('/scraper/download', async (req, res) => {
 
   const started = [];
   const createdJobs = [];
+  let skippedCount = 0;
   const redisOk = await isRedisAlive();
   const queueTotal = validItems.length;
 
@@ -1359,15 +1544,17 @@ app.post('/scraper/download', async (req, res) => {
       title,
       mode,
       useCookies,
+      skipExisting,
       queueIndex: i + 1,
       queueTotal,
       redisOk
     });
+    if (jobData.skipped) skippedCount++;
     started.push(jobData.id);
     createdJobs.push(jobData);
   }
 
-  res.json({ ok: true, started, jobs: createdJobs });
+  res.json({ ok: true, started, skippedCount, jobs: createdJobs });
 });
 
 app.post('/scraper/retry/:id', async (req, res) => {
@@ -1381,6 +1568,7 @@ app.post('/scraper/retry/:id', async (req, res) => {
     title: old.title || old.url,
     mode: old.mode || 'auto',
     useCookies: old.useCookies !== false,
+    skipExisting: false,
     queueIndex: old.queueIndex || 1,
     queueTotal: old.queueTotal || 1,
     redisOk

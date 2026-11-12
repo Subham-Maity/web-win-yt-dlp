@@ -10,6 +10,7 @@ ytdlp_ig_cookies_*.txt
 subham_xam/
 downloads/
 queue-state.json
+scrape-archive.json
 
 # Logs
 npm-debug.log*

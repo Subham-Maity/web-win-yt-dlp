@@ -521,6 +521,22 @@
       flex-shrink: 0;
     }
 
+    .scraper-done-pill {
+      font-size: 0.7rem;
+      font-weight: 700;
+      background: rgba(16, 185, 129, 0.14);
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      padding: 2px 8px;
+      border-radius: 99px;
+      flex-shrink: 0;
+    }
+
+    .scraper-item.already-downloaded {
+      opacity: 0.65;
+      border-style: dashed;
+    }
+
     .card-header-area {
       display: flex;
       align-items: center;
@@ -1589,6 +1605,10 @@
             <span id="scraperSelectedCount" style="font-size:0.78rem; color:var(--muted);">0 selected</span>
           </div>
           <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <label style="display:inline-flex; align-items:center; gap:5px; font-size:0.78rem; color:#6ee7b7; cursor:pointer; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.28); padding:5px 10px; border-radius:8px;">
+              <input type="checkbox" id="scraperSkipExisting" checked style="accent-color:#10b981;" onchange="renderScraperItems()" />
+              Skip already downloaded
+            </label>
             <input class="text-input scraper-input" id="scraperFilterInput" type="text" placeholder="Filter titles or URLs..." oninput="renderScraperItems()" style="padding:7px 12px; font-size:0.8rem; width:190px;" />
             <button class="btn btn-add btn-sm" onclick="toggleSelectAllScraped(true)">☑ Select All</button>
             <button class="btn btn-ghost btn-sm" onclick="toggleSelectAllScraped(false)">☐ None</button>
@@ -2821,13 +2841,16 @@
   }
 
   function applyScrapedResults(items, _pageTitle) {
+    const skipExisting = document.getElementById('scraperSkipExisting')?.checked !== false;
     scrapedItems = (items || []).map((item) => ({
       url: item.url,
       title: item.title || item.url,
       thumbnail: item.thumbnail || '',
       duration: item.duration || '',
       isDirectMedia: Boolean(item.isDirectMedia),
-      selected: true
+      alreadyDownloaded: Boolean(item.alreadyDownloaded),
+      existingFile: item.existingFile || '',
+      selected: !(skipExisting && item.alreadyDownloaded)
     }));
     document.getElementById('scraperResultsWrap').classList.add('active');
     renderScraperItems();
@@ -2844,7 +2867,12 @@
       .filter(({ item }) => !filter || item.title.toLowerCase().includes(filter) || item.url.toLowerCase().includes(filter));
 
     const totalSelected = scrapedItems.filter(i => i.selected).length;
-    if (foundEl) foundEl.textContent = `${scrapedItems.length} video${scrapedItems.length !== 1 ? 's' : ''} found`;
+    const alreadyCount = scrapedItems.filter(i => i.alreadyDownloaded).length;
+    if (foundEl) {
+      foundEl.textContent = alreadyCount > 0
+        ? `${scrapedItems.length} video${scrapedItems.length !== 1 ? 's' : ''} found (${alreadyCount} already downloaded)`
+        : `${scrapedItems.length} video${scrapedItems.length !== 1 ? 's' : ''} found`;
+    }
     if (selEl) selEl.textContent = `${totalSelected} selected`;
 
     if (visible.length === 0) {
@@ -2857,14 +2885,18 @@
         ? `<img class="scraper-thumb" src="${escHtml(item.thumbnail)}" loading="lazy" onerror="this.style.display='none'" />`
         : `<div class="scraper-thumb-placeholder">🎬</div>`;
       const durHtml = item.duration ? `<span class="scraper-dur-pill">${escHtml(item.duration)}</span>` : '';
+      const doneHtml = item.alreadyDownloaded
+        ? `<span class="scraper-done-pill" title="${escHtml(item.existingFile || 'Already downloaded')}">✓ Downloaded</span>`
+        : '';
       return `
-        <label class="scraper-item">
+        <label class="scraper-item ${item.alreadyDownloaded ? 'already-downloaded' : ''}">
           <input type="checkbox" ${item.selected ? 'checked' : ''} onchange="toggleScrapedItem(${idx}, this.checked)" />
           ${thumbHtml}
           <div class="scraper-item-meta">
             <div class="scraper-item-title">${escHtml(item.title)}</div>
             <div class="scraper-item-url">${escHtml(item.url)}</div>
           </div>
+          ${doneHtml}
           ${durHtml}
         </label>
       `;
@@ -2882,9 +2914,10 @@
 
   function toggleSelectAllScraped(state) {
     const filter = (document.getElementById('scraperFilterInput')?.value || '').trim().toLowerCase();
+    const skipExisting = document.getElementById('scraperSkipExisting')?.checked !== false;
     for (const item of scrapedItems) {
       if (!filter || item.title.toLowerCase().includes(filter) || item.url.toLowerCase().includes(filter)) {
-        item.selected = state;
+        item.selected = state ? !(skipExisting && item.alreadyDownloaded) : false;
       }
     }
     renderScraperItems();
@@ -2899,6 +2932,7 @@
 
     const mode = document.getElementById('scraperMode').value;
     const useCookies = document.getElementById('scraperUseCookies').checked;
+    const skipExisting = document.getElementById('scraperSkipExisting')?.checked !== false;
     const btn = document.getElementById('btnQueueSelected');
     btn.disabled = true;
     btn.textContent = '⏳ Queuing 1-by-1…';
@@ -2907,7 +2941,7 @@
       const r = await fetch('/scraper/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: selected, mode, useCookies })
+        body: JSON.stringify({ items: selected, mode, useCookies, skipExisting })
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Failed to enqueue selected videos');
@@ -2915,7 +2949,11 @@
       if (Array.isArray(d.jobs)) {
         for (const j of d.jobs) handleJob(j);
       }
-      toast(`🚀 Queued ${selected.length} video(s) for 1-by-1 background download!`);
+      const skipped = d.skippedCount || 0;
+      const queued = selected.length - skipped;
+      toast(skipped > 0
+        ? `🚀 Queued ${queued} new video(s), skipped ${skipped} already downloaded!`
+        : `🚀 Queued ${selected.length} video(s) for 1-by-1 background download!`);
     } catch (e) {
       toast('❌ ' + e.message, 4500);
     } finally {
