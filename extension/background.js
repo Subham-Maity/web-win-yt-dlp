@@ -325,6 +325,12 @@ async function handleSniffTask(url) {
               '.plyr__control--overlaid',
               '.jw-icon-display',
               '.fp-play',
+              '#play_button',
+              '[id*="play_button" i]',
+              '[id*="play-button" i]',
+              '[id*="play_btn" i]',
+              '[id*="play-btn" i]',
+              '[id*="playBtn" i]',
               'button[aria-label*="Play" i]',
               '[role="button"][aria-label*="Play" i]',
               '[title*="Play" i]',
@@ -332,18 +338,37 @@ async function handleSniffTask(url) {
               '[class*="play-button" i]',
               '[class*="playIcon" i]',
               '[class*="play_btn" i]',
+              '[class*="video-play" i]',
+              '[class*="play-overlay" i]',
               '[data-action="play"]'
             ];
+            let clicked = false;
+            function clickEl(btn) {
+              const r = btn.getBoundingClientRect();
+              if (r.width <= 8 || r.height <= 8) return false;
+              const style = window.getComputedStyle(btn);
+              if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) return false;
+              try {
+                btn.scrollIntoView({ block: 'center', inline: 'center' });
+                btn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+                btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                btn.click();
+                return true;
+              } catch (_) { return false; }
+            }
             for (const sel of playSelectors) {
               document.querySelectorAll(sel).forEach(btn => {
-                const r = btn.getBoundingClientRect();
-                if (r.width > 8 && r.height > 8) {
-                  try {
-                    btn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
-                    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                    btn.click();
-                  } catch (_) {}
+                if (!clicked && clickEl(btn)) clicked = true;
+              });
+              if (clicked) break;
+            }
+            if (!clicked) {
+              document.querySelectorAll('button, a, [role="button"]').forEach(btn => {
+                if (clicked || btn.closest('header, nav, footer')) return;
+                const txt = (btn.innerText || btn.textContent || '').replace(/\s+/g, ' ').trim();
+                if (/^(play|play video|watch|watch video|start video|continue|enter|i am 18\+?)$/i.test(txt)) {
+                  if (clickEl(btn)) clicked = true;
                 }
               });
             }

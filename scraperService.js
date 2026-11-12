@@ -875,6 +875,12 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
                   '.plyr__control--overlaid',
                   '.jw-icon-display',
                   '.fp-play',
+                  '#play_button',
+                  '[id*="play_button" i]',
+                  '[id*="play-button" i]',
+                  '[id*="play_btn" i]',
+                  '[id*="play-btn" i]',
+                  '[id*="playBtn" i]',
                   'button[aria-label*="Play" i]',
                   '[role="button"][aria-label*="Play" i]',
                   '[title*="Play" i]',
@@ -882,24 +888,44 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
                   '[class*="play-button" i]',
                   '[class*="playIcon" i]',
                   '[class*="play_btn" i]',
+                  '[class*="video-play" i]',
+                  '[class*="play-overlay" i]',
                   '[data-action="play"]'
                 ];
+                function tryUsePlayEl(btn) {
+                  const r = btn.getBoundingClientRect();
+                  if (r.width <= 8 || r.height <= 8) return false;
+                  const style = doc.defaultView ? doc.defaultView.getComputedStyle(btn) : null;
+                  if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) return false;
+                  try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+                  const r2 = btn.getBoundingClientRect();
+                  const cx = Math.round(offsetX + r2.left + r2.width / 2);
+                  const cy = Math.round(offsetY + r2.top + r2.height / 2);
+                  if (cx > 0 && cy > 0) {
+                    clickPoint = { x: cx, y: cy };
+                  } else {
+                    try { btn.click(); } catch (_) {}
+                  }
+                  return true;
+                }
+
                 for (const sel of playSelectors) {
                   const btns = doc.querySelectorAll(sel);
                   for (const btn of btns) {
-                    const r = btn.getBoundingClientRect();
-                    if (r.width > 8 && r.height > 8 && r.bottom > 0 && r.right > 0) {
-                      const style = doc.defaultView ? doc.defaultView.getComputedStyle(btn) : null;
-                      if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) continue;
-                      try { btn.click(); } catch (_) {}
-                      clickPoint = {
-                        x: Math.round(offsetX + r.left + r.width / 2),
-                        y: Math.round(offsetY + r.top + r.height / 2)
-                      };
-                      break;
-                    }
+                    if (tryUsePlayEl(btn)) break;
                   }
                   if (clickPoint) break;
+                }
+
+                if (!clickPoint) {
+                  const textBtns = doc.querySelectorAll('button, a, [role="button"]');
+                  for (const btn of textBtns) {
+                    if (btn.closest('header, nav, footer')) continue;
+                    const txt = (btn.innerText || btn.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (/^(play|play video|watch|watch video|start video|continue|enter|i am 18\+?)$/i.test(txt)) {
+                      if (tryUsePlayEl(btn)) break;
+                    }
+                  }
                 }
               }
 
@@ -937,7 +963,7 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
             }
           }
         } catch (_) {}
-      }, 1400);
+      }, 2000);
 
       sendCdpCommand(pageWs, ++cmdId, 'Page.navigate', { url }).catch(fail);
     });
