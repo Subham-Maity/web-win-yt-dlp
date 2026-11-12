@@ -10,7 +10,14 @@ Now features a dedicated **Instagram Profile Media Downloader** that can scrape 
 ## ✨ Features
 
 - **BullMQ Distributed Queue (Docker Redis)**: Powered by Redis for reliable job processing, concurrency control, and live status tracking.
-- **📸 Instagram Profile Media Downloader (New & Enhanced)**:
+- **🌐 Full Webpage Scraper & 1-by-1 Background Stream Queue (New)**:
+  - Paste any video gallery, creator, or listing webpage URL and click **🔍 Scan Webpage** to extract all video links, thumbnails, durations, and titles in one view.
+  - **Select All / Filter / Pick**: Choose individual videos or select the whole page at once and queue them all in one click.
+  - **Strictly 1-by-1 Sequential Queue (`scrapeQueue`)**: Processes one video from start to finish before opening the next — ideal for low-bandwidth or rate-limited sites.
+  - **Just-in-Time Background Play & Network Sniffing**: Right when a job starts, a muted background browser tab opens the video, captures the fresh `.m3u8` / `.mpd` / `.mp4` stream URL + `Referer`, `User-Agent`, and `Cookie` headers from live network traffic, closes the tab, and passes the fresh URL directly to `yt-dlp.exe` before expiring tokens go stale.
+  - **Dual Sniffer Modes + Bundled Browser Extension (`extension/`)**: Works via the bundled Chrome/Edge Extension Bridge (using your active browser session — click the extension icon on any open tab to send all its videos straight to the Web UI) or the built-in Local Browser CDP engine.
+  - **🍪 Generic Site Cookies & Browser Login Modal**: Paste, upload, or 1-click sync cookies (Netscape, Cookie-Editor JSON, or raw `Cookie:` header) for any domain into `cookies.txt` without overwriting existing cookies, or open the target site directly in the persistent Scraper Browser.
+- **📸 Instagram Profile Media Downloader**:
   - Input any Instagram profile URL or `@username` (e.g., `https://www.instagram.com/cristiano/` or `@natgeo`).
   - **Photos + Videos Support**: Scrapes and downloads all photos, carousels, Reels, and video posts till completion.
   - **Download Target Scope**:
@@ -107,6 +114,17 @@ You do not need to manually configure Docker, install packages, or run manual co
    C:\Users\<YourUsername>\Downloads\yt-dlp\Instagram\<username>\
    ```
 
+### 3. Full Webpage Scraper Tab (1-by-1 Queue + Stream Sniffer)
+1. Switch to the **🌐 Full Webpage Scraper** tab.
+2. *(Optional, Recommended for sites with strict anti-bot checks)* Load the bundled Chrome/Edge extension:
+   - Open `chrome://extensions` or `edge://extensions` and enable **Developer mode**.
+   - Click **Load unpacked** and select the `extension/` folder inside this project.
+   - The tab pill will turn **`🟢 Extension Bridge Connected`**. You can also click the extension icon on any open webpage tab to push all detected videos straight to the Web UI.
+3. *(Optional)* Click **`🍪 Cookies / Browser Login`** if the site requires authentication — either log in once via the Scraper Browser or paste/upload Netscape/JSON cookies for that domain.
+4. Paste any video listing or gallery webpage URL and click **`🔍 Scan Webpage`**.
+5. Review discovered videos, filter or click **`☑ Select All`**, and click **`⬇ Download Selected (1-by-1)`**.
+6. BullMQ processes the selected videos strictly **one at a time** in the background (muted tab → capture `.m3u8`/`.mp4` stream + headers → close tab → `yt-dlp.exe` download → wait until finished → next video).
+
 ---
 
 ## 📁 Download Directory
@@ -125,11 +143,17 @@ Click **`Open Downloads ↗`** in the top bar of the Web UI to open this folder 
 C:\Github\yt dlp\
 ├── public/                 # Web UI frontend (HTML/CSS/JS with tabs, modal & badges)
 │   └── index.html
+├── extension/              # Bundled Chrome/Edge MV3 Extension Bridge (DOM scan + webRequest sniffer)
+│   ├── manifest.json
+│   ├── background.js
+│   ├── popup.html
+│   └── popup.js
 ├── docker-compose.yml      # Docker Compose configuration for Redis container
-├── queue.js                # BullMQ queue & Redis client configuration
+├── queue.js                # BullMQ queues (downloadQueue & 1-by-1 scrapeQueue) & Redis client
+├── scraperService.js       # Webpage scanner, CDP background sniffer, extension bridge & cookie manager
 ├── instagramService.js     # Instagram profile media scraper (gallery-dl & instaloader)
 ├── instagramAuthService.js # Instagram session verification, cookie merging & modal API
-├── server.js               # Express API server with BullMQ Worker, auto-routing & SSE
+├── server.js               # Express API server with BullMQ Workers, auto-routing & SSE
 ├── yt-dlp.exe              # yt-dlp binary for individual media downloads
 ├── gallery-dl.exe          # gallery-dl binary for Instagram profiles & photo galleries
 ├── cookies.txt             # User cookies file (ignored by git for security)

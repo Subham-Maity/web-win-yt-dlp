@@ -5,7 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const { Worker } = require('bullmq');
 
-const { redisConnection, downloadQueue, activeProcesses, isRedisReady, isRedisAlive } = require('./queue');
+const { redisConnection, downloadQueue, scrapeQueue, activeProcesses, isRedisReady, isRedisAlive } = require('./queue');
 const { extractInstagramUsername, downloadInstagramProfile, isInstaloaderAvailable } = require('./instagramService');
 const {
   startInstagramLoginPopup,
@@ -16,6 +16,18 @@ const {
   saveManualSession,
   findBrowserExe
 } = require('./instagramAuthService');
+const {
+  isBridgeConnected,
+  getBridgeState,
+  handleBridgePoll,
+  handleBridgeResult,
+  getCookiesSummary,
+  saveGenericCookies,
+  clearDomainCookies,
+  ensureCdpBrowser,
+  scanWebpage,
+  sniffMediaStream
+} = require('./scraperService');
 
 const app = express();
 const PORT = 3456;
@@ -56,13 +68,30 @@ function broadcast(data) {
   }
 }
 
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
+app.use((req, res, next) => {
+  if (req.path.startsWith('/scraper/bridge') || req.path === '/scraper/push-scan') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
+
+function sanitizeFileName(name) {
+  return String(name || '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
 
 // ── yt-dlp Worker Handler ────────────────────────────────────────────────────
 function runYtdlpDownload(job) {
   return new Promise((resolve, reject) => {
-    const { url } = job.data;
+    const { url, resolvedHeaders, customOutputTitle, useCookies = true } = job.data;
     const id = job.id;
 
     const j = jobs.get(id);
@@ -72,16 +101,31 @@ function runYtdlpDownload(job) {
       broadcast({ type: 'job', ...j });
     }
 
+    const safeCustomTitle = sanitizeFileName(customOutputTitle);
+    const outTemplate = safeCustomTitle
+      ? path.join(DOWNLOAD_DIR, `${safeCustomTitle} [%(id)s].%(ext)s`)
+      : path.join(DOWNLOAD_DIR, '%(title)s [%(id)s].%(ext)s');
+
     const args = [
       '--no-playlist',
       '--js-runtimes', `node:${process.execPath}`,
-      '-o', path.join(DOWNLOAD_DIR, '%(title)s [%(id)s].%(ext)s'),
+      '-o', outTemplate,
       '--newline',
       '--progress-template', '%(progress._percent_str)s|%(info.title)s|%(progress._speed_str)s|%(progress._eta_str)s',
     ];
 
+    if (resolvedHeaders && resolvedHeaders.referer) {
+      args.push('--referer', resolvedHeaders.referer);
+    }
+    if (resolvedHeaders && resolvedHeaders.userAgent) {
+      args.push('--user-agent', resolvedHeaders.userAgent);
+    }
+    if (resolvedHeaders && resolvedHeaders.cookieHeader) {
+      args.push('--add-header', `Cookie:${resolvedHeaders.cookieHeader}`);
+    }
+
     let tempCookiesPath = null;
-    if (fs.existsSync(COOKIES)) {
+    if (useCookies && fs.existsSync(COOKIES)) {
       try {
         tempCookiesPath = path.join(os.tmpdir(), `ytdlp_cookies_${id}.txt`);
         fs.copyFileSync(COOKIES, tempCookiesPath);
@@ -279,6 +323,103 @@ downloadWorker.on('failed', (job, err) => {
 });
 
 downloadWorker.on('error', () => {
+  // Handled silently when Redis is unavailable
+});
+
+// ── Full Webpage Scraper Sequential Worker (Concurrency: 1) ──────────────────
+const activeScrapeAborts = new Map();
+let directScrapeChain = Promise.resolve();
+
+async function runScrapeJob(job) {
+  const id = job.id;
+  const { pageUrl, mode = 'auto', title: presetTitle, useCookies = true } = job.data;
+
+  const j = jobs.get(id);
+  if (j && j.status === 'cancelled') {
+    throw new Error('Cancelled by user');
+  }
+
+  const controller = new AbortController();
+  activeScrapeAborts.set(id, controller);
+
+  try {
+    if (j) {
+      j.status = 'downloading';
+      j.log = 'Opening video in background browser to capture stream...';
+      broadcast({ type: 'job', ...j });
+    }
+
+    const sniffed = await sniffMediaStream({
+      url: pageUrl,
+      mode,
+      cookiesFilePath: COOKIES,
+      abortSignal: controller.signal
+    });
+
+    if (j && j.status === 'cancelled') {
+      throw new Error('Cancelled by user');
+    }
+
+    const resolvedTitle = sniffed.title || presetTitle || pageUrl;
+    if (j) {
+      j.title = resolvedTitle;
+      j.log = `Stream captured via ${sniffed.via || 'browser'}! Starting yt-dlp...`;
+      broadcast({ type: 'job', ...j });
+    }
+
+    const result = await runYtdlpDownload({
+      id,
+      data: {
+        url: sniffed.mediaUrl,
+        title: resolvedTitle,
+        customOutputTitle: resolvedTitle,
+        useCookies,
+        resolvedHeaders: {
+          referer: sniffed.referer,
+          userAgent: sniffed.userAgent,
+          cookieHeader: sniffed.cookieHeader
+        }
+      }
+    });
+
+    return {
+      ...result,
+      title: resolvedTitle
+    };
+  } finally {
+    activeScrapeAborts.delete(id);
+  }
+}
+
+const scrapeWorker = new Worker('scrapeQueue', async (job) => {
+  return await runScrapeJob(job);
+}, {
+  connection: redisConnection,
+  concurrency: 1
+});
+
+scrapeWorker.on('completed', (job, result) => {
+  const j = jobs.get(job.id);
+  if (j) {
+    j.status = 'done';
+    j.progress = 100;
+    if (result && result.title) j.title = result.title;
+    j.log = 'Download complete. File saved to Downloads/yt-dlp/';
+    broadcast({ type: 'job', ...j });
+  }
+});
+
+scrapeWorker.on('failed', (job, err) => {
+  const j = jobs.get(job.id);
+  if (j && j.status !== 'cancelled') {
+    j.status = 'error';
+    j.error = err.message || 'Scrape download failed';
+    j.log = 'Failed: ' + (err.message || 'Error occurred');
+    broadcast({ type: 'job', ...j });
+  }
+});
+
+scrapeWorker.on('error', () => {
   // Handled silently when Redis is unavailable
 });
 
@@ -596,11 +737,11 @@ app.get('/jobs', (_req, res) => {
   res.json({ jobs: list });
 });
 
-// ── Cancel a job ─────────────────────────────────────────────────────────────
-app.post('/cancel/:id', async (req, res) => {
-  const id = req.params.id;
-  const job = jobs.get(id);
-
+function stopJobExecution(id) {
+  if (activeScrapeAborts.has(id)) {
+    try { activeScrapeAborts.get(id).abort(); } catch (_) {}
+    activeScrapeAborts.delete(id);
+  }
   if (activeProcesses.has(id)) {
     const proc = activeProcesses.get(id);
     try {
@@ -611,22 +752,36 @@ app.post('/cancel/:id', async (req, res) => {
     } catch (_) {}
     activeProcesses.delete(id);
   }
+}
 
-  if (isRedisReady()) {
-    try {
-      await Promise.race([
-        (async () => {
-          const bullJob = await downloadQueue.getJob(id);
+async function removeFromBullQueues(id) {
+  if (!isRedisReady()) return;
+  try {
+    await Promise.race([
+      (async () => {
+        for (const q of [downloadQueue, scrapeQueue]) {
+          const bullJob = await q.getJob(id);
           if (bullJob) await bullJob.remove();
-        })(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
-      ]);
-    } catch (_) {}
-  }
+        }
+      })(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
+    ]);
+  } catch (_) {}
+}
+
+// ── Cancel a job ─────────────────────────────────────────────────────────────
+app.post('/cancel/:id', async (req, res) => {
+  const id = req.params.id;
+  const job = jobs.get(id);
 
   if (job) {
     job.status = 'cancelled';
     job.log = 'Download cancelled by user.';
+  }
+  stopJobExecution(id);
+  await removeFromBullQueues(id);
+
+  if (job) {
     broadcast({ type: 'job', ...job });
   }
 
@@ -636,28 +791,11 @@ app.post('/cancel/:id', async (req, res) => {
 // ── Delete single job from list ──────────────────────────────────────────────
 app.delete('/job/:id', async (req, res) => {
   const id = req.params.id;
-  if (activeProcesses.has(id)) {
-    const proc = activeProcesses.get(id);
-    try {
-      proc.kill('SIGTERM');
-      if (proc.pid) {
-        spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
-      }
-    } catch (_) {}
-    activeProcesses.delete(id);
-  }
+  const job = jobs.get(id);
+  if (job) job.status = 'cancelled';
 
-  if (isRedisReady()) {
-    try {
-      await Promise.race([
-        (async () => {
-          const bullJob = await downloadQueue.getJob(id);
-          if (bullJob) await bullJob.remove();
-        })(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
-      ]);
-    } catch (_) {}
-  }
+  stopJobExecution(id);
+  await removeFromBullQueues(id);
 
   jobs.delete(id);
   broadcast({ type: 'job_removed', id });
@@ -677,7 +815,9 @@ app.post('/clear', async (_req, res) => {
       await Promise.race([
         Promise.all([
           downloadQueue.clean(0, 100, 'completed'),
-          downloadQueue.clean(0, 100, 'failed')
+          downloadQueue.clean(0, 100, 'failed'),
+          scrapeQueue.clean(0, 100, 'completed'),
+          scrapeQueue.clean(0, 100, 'failed')
         ]),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
       ]);
@@ -690,32 +830,31 @@ app.post('/clear', async (_req, res) => {
 
 // ── Clear ENTIRE queue (stuck, queued, downloading, finished) ─────────────────
 app.post('/clear-all', async (_req, res) => {
-  // 1. Terminate all running download child processes
-  for (const [id, proc] of activeProcesses.entries()) {
-    try {
-      proc.kill('SIGTERM');
-      if (proc.pid) {
-        spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
-      }
-    } catch (_) {}
+  // 1. Mark all queued/active jobs cancelled & abort active sniffs / processes
+  for (const [id, job] of jobs.entries()) {
+    job.status = 'cancelled';
+    stopJobExecution(id);
   }
+  activeScrapeAborts.clear();
   activeProcesses.clear();
 
-  // 2. Safely purge BullMQ queue if Redis is connected (with 1.5s timeout)
+  // 2. Safely purge BullMQ queues if Redis is connected (with 1.5s timeout)
   if (isRedisReady()) {
     try {
       await Promise.race([
         (async () => {
-          try {
-            await downloadQueue.pause();
-            await downloadQueue.drain(true);
-            await downloadQueue.clean(0, 0, 'active');
-            await downloadQueue.clean(0, 0, 'wait');
-            await downloadQueue.clean(0, 0, 'delayed');
-            await downloadQueue.clean(0, 0, 'completed');
-            await downloadQueue.clean(0, 0, 'failed');
-            await downloadQueue.resume();
-          } catch (_) {}
+          for (const q of [downloadQueue, scrapeQueue]) {
+            try {
+              await q.pause();
+              await q.drain(true);
+              await q.clean(0, 0, 'active');
+              await q.clean(0, 0, 'wait');
+              await q.clean(0, 0, 'delayed');
+              await q.clean(0, 0, 'completed');
+              await q.clean(0, 0, 'failed');
+              await q.resume();
+            } catch (_) {}
+          }
         })(),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500))
       ]);
@@ -758,7 +897,178 @@ app.get('/info', (_req, res) => {
     cookiesExist: fs.existsSync(COOKIES),
     hasIgSession,
     redisConnected: isRedisReady(),
+    bridgeConnected: isBridgeConnected(),
+    extensionDir: path.join(__dirname, 'extension')
   });
+});
+
+// ── Full Webpage Scraper & Extension Bridge Routes ────────────────────────────
+app.get('/scraper/bridge/poll', handleBridgePoll);
+
+app.post('/scraper/bridge/result', (req, res) => {
+  const matched = handleBridgeResult(req.body);
+  res.json({ ok: true, matched });
+});
+
+app.get('/scraper/bridge/status', (req, res) => {
+  const targetUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  res.json({
+    ok: true,
+    ...getBridgeState(),
+    cookies: getCookiesSummary(COOKIES, targetUrl),
+    extensionDir: path.join(__dirname, 'extension')
+  });
+});
+
+app.post('/scraper/scan', async (req, res) => {
+  const { url, mode = 'auto' } = req.body || {};
+  if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) {
+    return res.status(400).json({ error: 'Please enter a valid http:// or https:// webpage URL.' });
+  }
+  try {
+    const result = await scanWebpage({
+      url: url.trim(),
+      mode,
+      cookiesFilePath: COOKIES
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to scan webpage.' });
+  }
+});
+
+app.post('/scraper/push-scan', (req, res) => {
+  const { pageTitle, pageUrl, items } = req.body || {};
+  if (!Array.isArray(items)) {
+    return res.status(400).json({ error: 'Invalid scan payload.' });
+  }
+  broadcast({
+    type: 'scraper_scan_push',
+    pageTitle: pageTitle || pageUrl || 'Scanned Webpage',
+    pageUrl: pageUrl || '',
+    items
+  });
+  res.json({ ok: true, count: items.length });
+});
+
+app.post('/scraper/download', async (req, res) => {
+  const { items, mode = 'auto', useCookies = true } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'Select at least one video to queue.' });
+  }
+
+  const started = [];
+  const createdJobs = [];
+  const redisOk = await isRedisAlive();
+
+  for (const item of items) {
+    const pageUrl = (item && item.url ? String(item.url) : '').trim();
+    if (!pageUrl) continue;
+
+    const title = (item.title && String(item.title).trim()) || pageUrl;
+    const id = `scr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const jobData = {
+      id,
+      type: 'web_scrape',
+      url: pageUrl,
+      status: 'queued',
+      progress: 0,
+      title,
+      log: 'Queued for 1-by-1 sequential background capture...',
+      error: '',
+      badge: 'Webpage Scraper (1-by-1)'
+    };
+
+    jobs.set(id, jobData);
+    started.push(id);
+    createdJobs.push(jobData);
+    broadcast({ type: 'job', ...jobData });
+
+    const runDirectSequential = () => {
+      directScrapeChain = directScrapeChain
+        .catch(() => {})
+        .then(async () => {
+          const current = jobs.get(id);
+          if (!current || current.status === 'cancelled') return;
+          try {
+            const result = await runScrapeJob({
+              id,
+              data: { pageUrl, title, mode, useCookies }
+            });
+            current.status = 'done';
+            current.progress = 100;
+            if (result && result.title) current.title = result.title;
+            current.log = 'Download complete. File saved to Downloads/yt-dlp/';
+            broadcast({ type: 'job', ...current });
+          } catch (err) {
+            if (current.status !== 'cancelled') {
+              current.status = 'error';
+              current.error = err.message || 'Scrape download failed';
+              current.log = 'Failed: ' + (err.message || 'Error occurred');
+              broadcast({ type: 'job', ...current });
+            }
+          }
+        });
+    };
+
+    if (redisOk) {
+      try {
+        await Promise.race([
+          scrapeQueue.add('web_scrape', {
+            type: 'web_scrape',
+            pageUrl,
+            title,
+            mode,
+            useCookies
+          }, { jobId: id }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+        ]);
+      } catch (err) {
+        console.warn('⚠️ BullMQ add error for scraper, running sequential fallback:', err.message);
+        runDirectSequential();
+      }
+    } else {
+      runDirectSequential();
+    }
+  }
+
+  res.json({ ok: true, started, jobs: createdJobs });
+});
+
+app.post('/scraper/open-browser', async (req, res) => {
+  const { url } = req.body || {};
+  const targetUrl = (url && /^https?:\/\//i.test(url.trim())) ? url.trim() : 'about:blank';
+  try {
+    await ensureCdpBrowser({ visible: true, initialUrl: targetUrl });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/scraper/cookies-status', (req, res) => {
+  const targetUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  res.json({
+    ok: true,
+    ...getCookiesSummary(COOKIES, targetUrl),
+    cookiesFilePath: COOKIES
+  });
+});
+
+app.post('/scraper/save-cookies', (req, res) => {
+  const { cookieData, targetUrl } = req.body || {};
+  try {
+    const result = saveGenericCookies(cookieData, targetUrl, COOKIES);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/scraper/clear-cookies', (req, res) => {
+  const { targetUrl } = req.body || {};
+  const result = clearDomainCookies(COOKIES, targetUrl);
+  res.json({ ok: true, ...result });
 });
 
 // ── Instagram Authentication Routes ──────────────────────────────────────────

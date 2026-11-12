@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "yt-dlp BullMQ Webpage Bridge",
+  "version": "1.0.0",
+  "description": "Connects your browser session to the local yt-dlp BullMQ Downloader for full webpage video scanning and background stream sniffing.",
+  "permissions": [
+    "tabs",
+    "webRequest",
+    "scripting",
+    "cookies",
+    "alarms",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "yt-dlp BullMQ Webpage Bridge"
+  }
+}

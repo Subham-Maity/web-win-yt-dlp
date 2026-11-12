@@ -56,6 +56,20 @@ downloadQueue.on('error', () => {
   // Handled silently when Redis is disconnected; direct mode handles requests
 });
 
+// Sequential 1-by-1 queue for Full Webpage Scraper (resolves fresh stream just-in-time)
+const scrapeQueue = new Queue('scrapeQueue', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { count: 100 },
+    removeOnFail: { count: 100 }
+  }
+});
+
+scrapeQueue.on('error', () => {
+  // Handled silently when Redis is disconnected; direct sequential mode handles requests
+});
+
 // Map of jobId -> child_process instance (for killing active downloads on cancel)
 const activeProcesses = new Map();
 
@@ -76,6 +90,7 @@ async function isRedisAlive() {
 module.exports = {
   redisConnection,
   downloadQueue,
+  scrapeQueue,
   activeProcesses,
   isRedisReady: () => isRedisConnected && redisConnection.status === 'ready',
   isRedisAlive

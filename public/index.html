@@ -232,6 +232,11 @@
       box-shadow: 0 4px 20px rgba(225, 48, 108, 0.25);
     }
 
+    .tab-btn.active-scraper {
+      border-color: var(--cyan);
+      box-shadow: 0 4px 20px rgba(6, 182, 212, 0.25);
+    }
+
     /* Vibrant Feature Badge */
     .new-feature-badge {
       display: inline-flex;
@@ -247,6 +252,27 @@
       border-radius: 99px;
       box-shadow: 0 2px 10px rgba(225, 48, 108, 0.5);
       animation: badgeGlow 2.5s infinite alternate;
+    }
+
+    .scraper-feature-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: linear-gradient(135deg, #06b6d4 0%, #10b981 100%);
+      color: #041318;
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 3px 9px;
+      border-radius: 99px;
+      box-shadow: 0 2px 12px rgba(6, 182, 212, 0.45);
+      animation: scraperGlow 2.5s infinite alternate;
+    }
+
+    @keyframes scraperGlow {
+      from { box-shadow: 0 0 6px rgba(6, 182, 212, 0.35); }
+      to   { box-shadow: 0 0 16px rgba(16, 185, 129, 0.75); }
     }
 
     @keyframes badgeGlow {
@@ -291,6 +317,187 @@
       top: 0; left: 0; right: 0;
       height: 3px;
       background: var(--ig-gradient);
+    }
+
+    .card.scraper-theme {
+      border-color: rgba(6, 182, 212, 0.35);
+      background: linear-gradient(180deg, rgba(6, 182, 212, 0.04) 0%, var(--surface) 100%);
+    }
+
+    .card.scraper-theme::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #06b6d4, #10b981);
+    }
+
+    .text-input.scraper-input:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.2);
+    }
+
+    .btn-scraper {
+      background: linear-gradient(135deg, #06b6d4, #10b981);
+      color: #041318;
+      font-weight: 700;
+      box-shadow: 0 4px 18px rgba(6, 182, 212, 0.35);
+    }
+
+    .btn-scraper:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px rgba(16, 185, 129, 0.45);
+    }
+
+    .btn-scraper:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .scraper-howto {
+      background: rgba(6, 182, 212, 0.06);
+      border: 1px solid rgba(6, 182, 212, 0.25);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      margin-bottom: 18px;
+      font-size: 0.8rem;
+      color: #cbd5e1;
+      line-height: 1.5;
+    }
+
+    .scraper-howto-title {
+      font-weight: 700;
+      color: #67e8f9;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.82rem;
+    }
+
+    .scraper-howto ul {
+      margin: 0;
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .scraper-howto strong {
+      color: #fff;
+    }
+
+    .scraper-results-wrap {
+      margin-top: 20px;
+      border-top: 1px solid var(--border);
+      padding-top: 18px;
+      display: none;
+    }
+
+    .scraper-results-wrap.active {
+      display: block;
+    }
+
+    .scraper-results-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .scraper-item-list {
+      max-height: 360px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-right: 4px;
+    }
+
+    .scraper-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .scraper-item:hover {
+      border-color: rgba(6, 182, 212, 0.5);
+      background: var(--surface3);
+    }
+
+    .scraper-item input[type="checkbox"] {
+      width: 17px;
+      height: 17px;
+      accent-color: #06b6d4;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .scraper-thumb {
+      width: 76px;
+      height: 46px;
+      border-radius: 6px;
+      object-fit: cover;
+      background: #090c14;
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .scraper-thumb-placeholder {
+      width: 76px;
+      height: 46px;
+      border-radius: 6px;
+      background: #090c14;
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .scraper-item-meta {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .scraper-item-title {
+      font-size: 0.86rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .scraper-item-url {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 2px;
+    }
+
+    .scraper-dur-pill {
+      font-size: 0.7rem;
+      font-family: 'JetBrains Mono', monospace;
+      background: rgba(6, 182, 212, 0.14);
+      color: #67e8f9;
+      border: 1px solid rgba(6, 182, 212, 0.3);
+      padding: 2px 7px;
+      border-radius: 99px;
+      flex-shrink: 0;
     }
 
     .card-header-area {
@@ -601,6 +808,11 @@
       background: linear-gradient(90deg, rgba(225, 48, 108, 0.04) 0%, var(--surface) 100%);
     }
 
+    .job-card.scr-job.downloading {
+      border-left: 4px solid var(--cyan);
+      background: linear-gradient(90deg, rgba(6, 182, 212, 0.05) 0%, var(--surface) 100%);
+    }
+
     .job-card.done {
       border-left: 4px solid var(--green);
     }
@@ -658,6 +870,12 @@
       background: rgba(99, 102, 241, 0.15);
       color: #a5b4fc;
       border: 1px solid rgba(99, 102, 241, 0.3);
+    }
+
+    .badge-scr-pill {
+      background: rgba(6, 182, 212, 0.15);
+      color: #67e8f9;
+      border: 1px solid rgba(6, 182, 212, 0.35);
     }
 
     .job-title {
@@ -731,6 +949,10 @@
 
     .progress-bar-fill.ig-fill {
       background: var(--ig-gradient);
+    }
+
+    .progress-bar-fill.scr-fill {
+      background: linear-gradient(90deg, #06b6d4, #10b981);
     }
 
     .job-pct {
@@ -1041,13 +1263,17 @@
   </div>
 
   <!-- Tab Navigation -->
-  <div class="tab-bar">
+  <div class="tab-bar" style="flex-wrap:wrap;">
     <button class="tab-btn active" id="tabStdBtn" onclick="switchTab('std')">
       🎬 Standard Downloader
     </button>
     <button class="tab-btn" id="tabIgBtn" onclick="switchTab('ig')">
       📸 Instagram Profile Downloader
       <span class="new-feature-badge">✨ Instagram Profile Download</span>
+    </button>
+    <button class="tab-btn" id="tabScraperBtn" onclick="switchTab('scraper')">
+      🌐 Full Webpage Scraper
+      <span class="scraper-feature-badge">✨ Full Webpage Scraper</span>
     </button>
   </div>
 
@@ -1127,6 +1353,112 @@
         </button>
         <button class="btn btn-ghost" onclick="clearDone()">🗑 Clear Finished</button>
         <button class="btn btn-danger" onclick="clearAllQueue()" title="Force cancel and remove all downloads">🛑 Clear Queue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: Full Webpage Scraper (NEW FEATURE) -->
+  <div class="tab-panel" id="tabPanelScraper">
+    <div class="card scraper-theme">
+      <div class="card-header-area" style="flex-wrap:wrap; gap:10px;">
+        <div class="card-title">
+          <span>Full Webpage Video Scraper</span>
+          <span class="scraper-feature-badge">Full Webpage Scraper • 1-by-1 Queue</span>
+        </div>
+        <div id="bridgeStatusPill" style="font-size:0.75rem; font-weight:600; padding:4px 10px; border-radius:99px; background:var(--surface2); border:1px solid var(--border); color:var(--muted);">
+          ⚪ Checking Extension Bridge...
+        </div>
+      </div>
+
+      <!-- Compact How It Works Info Box -->
+      <div class="scraper-howto">
+        <div class="scraper-howto-title">ℹ️ How Full Webpage Scraper Works</div>
+        <ul>
+          <li><strong>1. Scan Whole Webpage:</strong> Paste any video gallery, creator, or listing URL and click <strong>Scan Webpage</strong> to discover all video links & thumbnails on the page at once.</li>
+          <li><strong>2. Select & Queue (1-by-1):</strong> Pick videos (or <strong>Select All</strong>) and queue them into <strong>BullMQ (Redis)</strong>. Downloads run <strong>strictly one-by-one</strong> until finished — ideal for slow or bandwidth-limited websites.</li>
+          <li><strong>3. Background Play & Network Sniff:</strong> When each job starts, the background browser opens that video muted, captures the fresh stream URL (<code>.m3u8</code> / <code>.mpd</code> / <code>.mp4</code>) + session headers from network traffic, closes the tab, and hands it to <code>yt-dlp</code> before tokens expire.</li>
+        </ul>
+      </div>
+
+      <div class="url-row" style="margin-bottom:14px;">
+        <input
+          class="text-input scraper-input"
+          id="scraperUrlInput"
+          type="url"
+          placeholder="https://example.com/videos/page/1 (Paste any gallery, creator, or video page URL)"
+          oninput="refreshScraperCookieStatus()"
+          onkeydown="if(event.key === 'Enter') scanWebpage()"
+        />
+        <button class="btn btn-scraper" id="btnScanWebpage" onclick="scanWebpage()">
+          🔍 Scan Webpage
+        </button>
+      </div>
+
+      <div class="control-grid" style="margin-top:12px; margin-bottom:16px;">
+        <div class="control-group">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <label style="margin:0;">Background Sniffer Engine</label>
+            <button type="button" onclick="toggleExtGuide()" style="background:rgba(6,182,212,0.14); border:1px solid rgba(6,182,212,0.35); color:#67e8f9; font-size:0.72rem; font-weight:600; padding:3px 9px; border-radius:6px; cursor:pointer;">
+              🧩 Extension Setup
+            </button>
+          </div>
+          <select class="select-input" id="scraperMode">
+            <option value="auto" selected>⚡ Auto (Extension Bridge → Local Browser CDP)</option>
+            <option value="extension">🧩 Chrome/Edge Extension Bridge (Active Browser)</option>
+            <option value="cdp">🌐 Local Scraper Browser (Chrome/Edge CDP)</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <label style="margin:0;">Site Cookies / Authentication</label>
+            <button type="button" onclick="openScraperCookieModal()" style="background:linear-gradient(135deg, #06b6d4, #10b981); border:none; color:#041318; font-size:0.75rem; font-weight:700; padding:4px 10px; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:5px;">
+              🍪 Cookies / Browser Login
+            </button>
+          </div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; min-height:44px;">
+            <span id="scraperCookieSummary" style="font-size:0.8rem; color:var(--muted);">Checking cookies.txt...</span>
+            <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:0.75rem; color:#e2e8f0; text-transform:none; letter-spacing:0; cursor:pointer; flex-shrink:0;">
+              <input type="checkbox" id="scraperUseCookies" checked style="accent-color:#06b6d4;" />
+              Use cookies
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Optional Chrome/Edge Extension Quick Setup Drawer -->
+      <div id="extSetupGuide" style="display:none; background:rgba(16,185,129,0.06); border:1px dashed rgba(16,185,129,0.35); border-radius:var(--radius-sm); padding:12px 16px; margin-bottom:16px; font-size:0.78rem; color:#cbd5e1; line-height:1.5;">
+        <strong style="color:#6ee7b7;">🧩 Optional Extension Bridge (Best for sites with strict anti-bot checks):</strong><br/>
+        1. Open <code>chrome://extensions</code> (or <code>edge://extensions</code>) and enable <strong>Developer mode</strong>.<br/>
+        2. Click <strong>Load unpacked</strong> and select the folder: <code id="extFolderPath" style="color:#67e8f9;">extension/</code><br/>
+        3. Once loaded, this tab automatically turns <strong>🟢 Extension Connected</strong> and you can also click the extension icon on any open tab to send all its videos straight here!
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-add" onclick="openScraperBrowser()" title="Open this URL in the local Scraper Browser if you need to log in once">
+          🌐 Open Site in Browser
+        </button>
+        <button class="btn btn-ghost" onclick="clearDone()">🗑 Clear Finished</button>
+        <button class="btn btn-danger" onclick="clearAllQueue()" title="Force cancel and remove all downloads">🛑 Clear Queue</button>
+      </div>
+
+      <!-- Discovered Videos Checklist -->
+      <div class="scraper-results-wrap" id="scraperResultsWrap">
+        <div class="scraper-results-toolbar">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <strong id="scraperFoundCount" style="font-size:0.9rem; color:#67e8f9;">0 videos found</strong>
+            <span id="scraperSelectedCount" style="font-size:0.78rem; color:var(--muted);">0 selected</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <input class="text-input scraper-input" id="scraperFilterInput" type="text" placeholder="Filter titles or URLs..." oninput="renderScraperItems()" style="padding:7px 12px; font-size:0.8rem; width:190px;" />
+            <button class="btn btn-add btn-sm" onclick="toggleSelectAllScraped(true)">☑ Select All</button>
+            <button class="btn btn-ghost btn-sm" onclick="toggleSelectAllScraped(false)">☐ None</button>
+            <button class="btn btn-scraper btn-sm" id="btnQueueSelected" onclick="queueSelectedScraped()">
+              ⬇ Download Selected (1-by-1)
+            </button>
+          </div>
+        </div>
+        <div class="scraper-item-list" id="scraperItemList"></div>
       </div>
     </div>
   </div>
@@ -1233,6 +1565,67 @@
   </div>
 </div>
 
+<!-- Generic Site Cookies & Scraper Browser Modal -->
+<div class="modal-overlay" id="scraperCookieModal">
+  <div class="modal-card" style="max-width:560px;">
+    <div class="modal-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:1.2rem;">🍪</span>
+        <h3 style="margin:0;">Site Cookies &amp; Scraper Browser</h3>
+      </div>
+      <button class="modal-close" onclick="closeScraperCookieModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="scraperModalCookieBanner" style="padding:12px 14px; border-radius:8px; font-size:0.82rem; line-height:1.45; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.02);">
+        Checking cookies.txt status...
+      </div>
+
+      <div class="auth-section">
+        <h4>🌐 Option A: Log In via Scraper Browser (Persistent Profile)</h4>
+        <p>
+          Open the target website directly in the local Scraper Browser (Chrome/Edge). Any login session or cookies you establish stay saved in the scraper browser profile for future scans and downloads.
+        </p>
+        <button class="btn btn-scraper" onclick="openScraperBrowser()" style="width:100%; justify-content:center;">
+          🚀 Open Website in Scraper Browser
+        </button>
+      </div>
+
+      <div class="modal-divider">OR</div>
+
+      <div class="auth-section">
+        <h4>📋 Option B: Paste, Sync, or Upload Site Cookies</h4>
+        <p>
+          Import cookies for any website (Netscape <code>cookies.txt</code>, Cookie-Editor JSON, or raw <code>Cookie: name=value; ...</code> header). Existing cookies for other sites are preserved.
+        </p>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <textarea
+            class="text-input scraper-input"
+            id="txtScraperCookies"
+            rows="3"
+            placeholder="Paste Netscape cookies.txt, Cookie-Editor JSON array, or raw name=value; ... header"
+            style="font-family:monospace; font-size:0.8rem; resize:vertical; line-height:1.4;"
+          ></textarea>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="pasteSyncScraperCookies()" style="flex:1; justify-content:center; background:linear-gradient(135deg,#10b981,#059669); border:none; font-size:0.82rem; padding:9px 12px;">
+              📋 Paste &amp; Sync
+            </button>
+            <button class="btn btn-scraper" onclick="saveScraperCookies()" style="flex:1; justify-content:center; font-size:0.82rem; padding:9px 12px;">
+              💾 Save Cookies
+            </button>
+            <button class="btn btn-ghost" onclick="document.getElementById('scraperCookieFileInput').click()" style="justify-content:center; font-size:0.82rem; padding:9px 12px;">
+              📁 Upload File
+            </button>
+            <input type="file" id="scraperCookieFileInput" accept=".txt,.json" style="display:none;" onchange="handleScraperCookieFile(event)" />
+          </div>
+          <button class="btn btn-ghost" onclick="clearScraperCookies()" style="width:100%; justify-content:center; color:#f87171; border-color:rgba(239,68,68,0.25); font-size:0.75rem; padding:6px;">
+            🗑 Clear Matching Site Cookies (Preserves Other Domains)
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
   // ── State ──────────────────────────────────────────────────────────────────
   const jobData = {}; // id -> { id, type, url, status, progress, title, error, log, badge }
@@ -1242,7 +1635,9 @@
   fetchJobs(); // Immediate initial queue sync
   addRow();    // Initial input row
   connectSSE();
+  refreshScraperBridgeStatus();
   setInterval(fetchJobs, 2500); // Fail-safe polling fallback ensures queue never goes blank
+  setInterval(refreshScraperBridgeStatus, 5000);
 
   async function fetchInfo() {
     try {
@@ -1269,6 +1664,11 @@
         }
       }
 
+      if (d.extensionDir) {
+        const extEl = document.getElementById('extFolderPath');
+        if (extEl) extEl.textContent = d.extensionDir;
+      }
+
       if (!d.ytdlpExists) toast('⚠️ yt-dlp.exe not found in server folder!', 5000);
     } catch(e) {}
   }
@@ -1291,20 +1691,31 @@
   function switchTab(tab) {
     const stdBtn = document.getElementById('tabStdBtn');
     const igBtn  = document.getElementById('tabIgBtn');
+    const scrBtn = document.getElementById('tabScraperBtn');
     const stdPnl = document.getElementById('tabPanelStd');
     const igPnl  = document.getElementById('tabPanelIg');
+    const scrPnl = document.getElementById('tabPanelScraper');
+
+    stdBtn.className = 'tab-btn';
+    igBtn.className  = 'tab-btn';
+    scrBtn.className = 'tab-btn';
+    stdPnl.className = 'tab-panel';
+    igPnl.className  = 'tab-panel';
+    scrPnl.className = 'tab-panel';
 
     if (tab === 'ig') {
-      stdBtn.className = 'tab-btn';
-      igBtn.className  = 'tab-btn active active-ig';
-      stdPnl.className = 'tab-panel';
-      igPnl.className  = 'tab-panel active';
+      igBtn.className = 'tab-btn active active-ig';
+      igPnl.className = 'tab-panel active';
       document.getElementById('igProfileInput').focus();
+    } else if (tab === 'scraper') {
+      scrBtn.className = 'tab-btn active active-scraper';
+      scrPnl.className = 'tab-panel active';
+      refreshScraperBridgeStatus();
+      refreshScraperCookieStatus();
+      document.getElementById('scraperUrlInput').focus();
     } else {
       stdBtn.className = 'tab-btn active';
-      igBtn.className  = 'tab-btn';
       stdPnl.className = 'tab-panel active';
-      igPnl.className  = 'tab-panel';
     }
   }
 
@@ -1342,6 +1753,13 @@
         if (btn) { btn.disabled = false; btn.textContent = '⬇ Download Queue'; }
         const igBtn = document.getElementById('btnIgDownload');
         if (igBtn) { igBtn.disabled = false; igBtn.textContent = '⚡ Fetch & Download Profile Media Till End'; }
+        const scrBtn = document.getElementById('btnQueueSelected');
+        if (scrBtn) { scrBtn.disabled = false; scrBtn.textContent = '⬇ Download Selected (1-by-1)'; }
+      } else if (msg.type === 'scraper_scan_push') {
+        switchTab('scraper');
+        if (msg.pageUrl) document.getElementById('scraperUrlInput').value = msg.pageUrl;
+        applyScrapedResults(msg.items || [], msg.pageTitle || 'Active Browser Tab');
+        toast(`🌐 Received ${(msg.items || []).length} video link(s) from Browser Extension!`);
       } else if (msg.type === 'job_removed') {
         delete jobData[msg.id];
         const el = document.getElementById('job-' + msg.id);
@@ -1389,6 +1807,11 @@
 
   function handleJob(j) {
     if (!j || !j.id) return;
+    const defaultBadge = j.type === 'instagram_profile'
+      ? 'Instagram Profile Download'
+      : j.type === 'web_scrape'
+        ? 'Webpage Scraper (1-by-1)'
+        : 'Video Download';
     jobData[j.id] = {
       id: j.id,
       type: j.type || 'standard',
@@ -1398,7 +1821,7 @@
       title: j.title || j.url,
       error: j.error || '',
       log: j.log || '',
-      badge: j.badge || (j.type === 'instagram_profile' ? 'Instagram Profile Download' : 'Video Download')
+      badge: j.badge || defaultBadge
     };
     upsertJobCard(j.id);
     updateCount();
@@ -1419,11 +1842,12 @@
     const card = document.getElementById('job-' + id);
     if (card && (wasQueued || !document.getElementById('fill-' + id))) {
       const isIg = jobData[id].type === 'instagram_profile';
-      card.className = `job-card ${isIg ? 'ig-job ' : ''}downloading`;
+      const isScr = jobData[id].type === 'web_scrape';
+      card.className = `job-card ${isIg ? 'ig-job ' : isScr ? 'scr-job ' : ''}downloading`;
       const statusArea = card.querySelector('.job-status-area');
       if (statusArea) statusArea.innerHTML = renderStatusArea(id, jobData[id]);
       const iconEl = card.querySelector('.job-icon');
-      if (iconEl) iconEl.textContent = isIg ? '📸' : '⬇️';
+      if (iconEl) iconEl.textContent = isIg ? '📸' : isScr ? '🌐' : '⬇️';
     }
 
     // Update DOM elements in place
@@ -1443,14 +1867,17 @@
     const j = jobData[id];
     const existing = document.getElementById('job-' + id);
     const isIg = j.type === 'instagram_profile';
+    const isScr = j.type === 'web_scrape';
+    const typeClass = isIg ? 'ig-job ' : isScr ? 'scr-job ' : '';
+    const activeIcon = isIg ? '📸' : isScr ? '🌐' : '⬇️';
 
-    const icons = { done: '✅', error: '❌', cancelled: '⛔', downloading: isIg ? '📸' : '⬇️', queued: '🕐' };
-    const icon = icons[j.status] || (isIg ? '📸' : '⬇️');
+    const icons = { done: '✅', error: '❌', cancelled: '⛔', downloading: activeIcon, queued: '🕐' };
+    const icon = icons[j.status] || activeIcon;
     const displayTitle = j.title || j.url;
     const isActive = j.status === 'downloading' || j.status === 'queued';
 
     if (existing) {
-      existing.className = `job-card ${isIg ? 'ig-job ' : ''}${j.status}`;
+      existing.className = `job-card ${typeClass}${j.status}`;
       const statusArea = existing.querySelector('.job-status-area');
       if (statusArea) statusArea.innerHTML = renderStatusArea(id, j);
       const iconEl = existing.querySelector('.job-icon');
@@ -1466,11 +1893,11 @@
       if (logEl && j.log) logEl.textContent = j.log;
     } else {
       const card = document.createElement('div');
-      card.className = `job-card ${isIg ? 'ig-job ' : ''}${j.status}`;
+      card.className = `job-card ${typeClass}${j.status}`;
       card.id = 'job-' + id;
 
-      const badgeClass = isIg ? 'badge-ig-pill' : 'badge-std-pill';
-      const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : 'Video Download');
+      const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : 'badge-std-pill';
+      const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : 'Video Download');
 
       card.innerHTML = `
         <div class="job-top">
@@ -1499,6 +1926,7 @@
 
   function renderStatusArea(id, j) {
     const isIg = j.type === 'instagram_profile';
+    const isScr = j.type === 'web_scrape';
     const logText = j.log || (j.status === 'queued' ? 'Waiting for BullMQ worker slot...' : 'Processing...');
 
     if (j.status === 'done') {
@@ -1538,7 +1966,7 @@
       return `
         <div class="job-meta-status">
           <span class="status-badge status-queued">🕐 Queued in BullMQ</span>
-          <small style="color:var(--muted); font-size:0.75rem;">Waiting for worker slot...</small>
+          <small style="color:var(--muted); font-size:0.75rem;">${isScr ? 'Waiting for 1-by-1 slot...' : 'Waiting for worker slot...'}</small>
         </div>
         <div class="job-terminal">
           <span class="term-prompt">❯</span>
@@ -1548,7 +1976,8 @@
     }
 
     // downloading
-    const fillClass = isIg ? 'ig-fill' : '';
+    const fillClass = isIg ? 'ig-fill' : isScr ? 'scr-fill' : '';
+    const statusLabel = isIg ? 'Scraping & Downloading' : isScr ? 'Sniffing & Downloading' : 'Downloading';
     return `
       <div class="job-status-row">
         <div class="progress-bar-wrap">
@@ -1557,7 +1986,7 @@
         <div class="job-pct" id="pct-${id}">${(j.progress || 0).toFixed(0)}%</div>
       </div>
       <div class="job-meta-status">
-        <span class="status-badge status-downloading">⚡ ${isIg ? 'Scraping & Downloading' : 'Downloading'}</span>
+        <span class="status-badge status-downloading">⚡ ${statusLabel}</span>
       </div>
       <div class="job-terminal">
         <span class="term-prompt">❯</span>
@@ -1999,6 +2428,315 @@
       updateModalStatus();
     } catch (err) {
       toast('❌ ' + err.message);
+    }
+  }
+
+  // ── Full Webpage Scraper & Generic Cookies Controls ────────────────────────
+  let scrapedItems = []; // [{ url, title, thumbnail, duration, isDirectMedia, selected }]
+
+  async function refreshScraperBridgeStatus() {
+    const pill = document.getElementById('bridgeStatusPill');
+    if (!pill) return;
+    try {
+      const targetUrl = document.getElementById('scraperUrlInput')?.value.trim() || '';
+      const r = await fetch('/scraper/bridge/status?url=' + encodeURIComponent(targetUrl));
+      const d = await r.json();
+      if (d.bridgeConnected) {
+        pill.style.background = 'rgba(16, 185, 129, 0.14)';
+        pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+        pill.style.color = '#6ee7b7';
+        pill.textContent = '🟢 Extension Bridge Connected';
+      } else {
+        pill.style.background = 'var(--surface2)';
+        pill.style.borderColor = 'var(--border)';
+        pill.style.color = 'var(--muted)';
+        pill.textContent = d.cdpBrowserAvailable ? '🌐 Local Browser CDP Ready' : '⚪ Extension Offline';
+      }
+      if (d.extensionDir) {
+        const extEl = document.getElementById('extFolderPath');
+        if (extEl) extEl.textContent = d.extensionDir;
+      }
+      if (d.cookies) renderScraperCookieSummary(d.cookies);
+    } catch (_) {}
+  }
+
+  async function refreshScraperCookieStatus() {
+    try {
+      const targetUrl = document.getElementById('scraperUrlInput')?.value.trim() || '';
+      const r = await fetch('/scraper/cookies-status?url=' + encodeURIComponent(targetUrl));
+      const d = await r.json();
+      renderScraperCookieSummary(d);
+    } catch (_) {}
+  }
+
+  function renderScraperCookieSummary(d) {
+    const el = document.getElementById('scraperCookieSummary');
+    const banner = document.getElementById('scraperModalCookieBanner');
+    if (!d) return;
+
+    let text = '';
+    if (!d.exists || d.totalCookies === 0) {
+      text = '<span style="color:var(--muted);">No cookies saved yet (optional)</span>';
+    } else if (d.targetDomain) {
+      text = d.matchingCount > 0
+        ? `<span style="color:#6ee7b7; font-weight:600;">🟢 ${d.matchingCount} cookie(s) for ${escHtml(d.targetDomain)}</span> (${d.totalCookies} total)`
+        : `<span style="color:#fbbf24;">⚠️ 0 cookies for ${escHtml(d.targetDomain)}</span> (${d.totalCookies} total across ${d.domainsCount} site(s))`;
+    } else {
+      text = `<span style="color:#67e8f9;">🍪 ${d.totalCookies} cookie(s) across ${d.domainsCount} domain(s)</span>`;
+    }
+
+    if (el) el.innerHTML = text;
+    if (banner) {
+      banner.innerHTML = `<strong>cookies.txt Status:</strong> ${text}`;
+    }
+  }
+
+  function toggleExtGuide() {
+    const box = document.getElementById('extSetupGuide');
+    if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  }
+
+  async function scanWebpage() {
+    const inp = document.getElementById('scraperUrlInput');
+    const url = inp.value.trim();
+    if (!url || !/^https?:\/\//i.test(url)) {
+      toast('⚠️ Please enter a valid http:// or https:// webpage URL');
+      inp.focus();
+      return;
+    }
+
+    const mode = document.getElementById('scraperMode').value;
+    const btn = document.getElementById('btnScanWebpage');
+    btn.disabled = true;
+    btn.textContent = '⏳ Scanning Webpage…';
+
+    try {
+      const r = await fetch('/scraper/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, mode })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Webpage scan failed');
+
+      let items = Array.isArray(d.items) ? d.items : [];
+      if (items.length === 0) {
+        items = [{
+          url,
+          title: d.pageTitle || url,
+          thumbnail: '',
+          duration: '',
+          isDirectMedia: false
+        }];
+        toast('ℹ️ No sub-video links found; added the page itself so you can sniff & download it.', 4500);
+      } else {
+        toast(`✅ Found ${items.length} video link(s) via ${d.via === 'extension' ? 'Extension Bridge' : 'Local Browser'}!`);
+      }
+
+      applyScrapedResults(items, d.pageTitle || url);
+    } catch (e) {
+      toast('❌ ' + e.message, 5000);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🔍 Scan Webpage';
+    }
+  }
+
+  function applyScrapedResults(items, _pageTitle) {
+    scrapedItems = (items || []).map((item) => ({
+      url: item.url,
+      title: item.title || item.url,
+      thumbnail: item.thumbnail || '',
+      duration: item.duration || '',
+      isDirectMedia: Boolean(item.isDirectMedia),
+      selected: true
+    }));
+    document.getElementById('scraperResultsWrap').classList.add('active');
+    renderScraperItems();
+  }
+
+  function renderScraperItems() {
+    const list = document.getElementById('scraperItemList');
+    const filter = (document.getElementById('scraperFilterInput')?.value || '').trim().toLowerCase();
+    const foundEl = document.getElementById('scraperFoundCount');
+    const selEl = document.getElementById('scraperSelectedCount');
+
+    const visible = scrapedItems
+      .map((item, idx) => ({ item, idx }))
+      .filter(({ item }) => !filter || item.title.toLowerCase().includes(filter) || item.url.toLowerCase().includes(filter));
+
+    const totalSelected = scrapedItems.filter(i => i.selected).length;
+    if (foundEl) foundEl.textContent = `${scrapedItems.length} video${scrapedItems.length !== 1 ? 's' : ''} found`;
+    if (selEl) selEl.textContent = `${totalSelected} selected`;
+
+    if (visible.length === 0) {
+      list.innerHTML = '<div style="text-align:center; padding:24px; color:var(--muted); font-size:0.84rem;">No videos match your filter.</div>';
+      return;
+    }
+
+    list.innerHTML = visible.map(({ item, idx }) => {
+      const thumbHtml = item.thumbnail
+        ? `<img class="scraper-thumb" src="${escHtml(item.thumbnail)}" loading="lazy" onerror="this.style.display='none'" />`
+        : `<div class="scraper-thumb-placeholder">🎬</div>`;
+      const durHtml = item.duration ? `<span class="scraper-dur-pill">${escHtml(item.duration)}</span>` : '';
+      return `
+        <label class="scraper-item">
+          <input type="checkbox" ${item.selected ? 'checked' : ''} onchange="toggleScrapedItem(${idx}, this.checked)" />
+          ${thumbHtml}
+          <div class="scraper-item-meta">
+            <div class="scraper-item-title">${escHtml(item.title)}</div>
+            <div class="scraper-item-url">${escHtml(item.url)}</div>
+          </div>
+          ${durHtml}
+        </label>
+      `;
+    }).join('');
+  }
+
+  function toggleScrapedItem(idx, checked) {
+    if (scrapedItems[idx]) {
+      scrapedItems[idx].selected = checked;
+      const totalSelected = scrapedItems.filter(i => i.selected).length;
+      const selEl = document.getElementById('scraperSelectedCount');
+      if (selEl) selEl.textContent = `${totalSelected} selected`;
+    }
+  }
+
+  function toggleSelectAllScraped(state) {
+    const filter = (document.getElementById('scraperFilterInput')?.value || '').trim().toLowerCase();
+    for (const item of scrapedItems) {
+      if (!filter || item.title.toLowerCase().includes(filter) || item.url.toLowerCase().includes(filter)) {
+        item.selected = state;
+      }
+    }
+    renderScraperItems();
+  }
+
+  async function queueSelectedScraped() {
+    const selected = scrapedItems.filter(i => i.selected).map(i => ({ url: i.url, title: i.title }));
+    if (selected.length === 0) {
+      toast('⚠️ Select at least one video first');
+      return;
+    }
+
+    const mode = document.getElementById('scraperMode').value;
+    const useCookies = document.getElementById('scraperUseCookies').checked;
+    const btn = document.getElementById('btnQueueSelected');
+    btn.disabled = true;
+    btn.textContent = '⏳ Queuing 1-by-1…';
+
+    try {
+      const r = await fetch('/scraper/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: selected, mode, useCookies })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Failed to enqueue selected videos');
+
+      if (Array.isArray(d.jobs)) {
+        for (const j of d.jobs) handleJob(j);
+      }
+      toast(`🚀 Queued ${selected.length} video(s) for 1-by-1 background download!`);
+    } catch (e) {
+      toast('❌ ' + e.message, 4500);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '⬇ Download Selected (1-by-1)';
+    }
+  }
+
+  async function openScraperBrowser() {
+    const url = document.getElementById('scraperUrlInput')?.value.trim() || '';
+    try {
+      const r = await fetch('/scraper/open-browser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Failed to launch Scraper Browser');
+      toast('🌐 Scraper Browser opened! Log in if needed, then return here to scan/download.', 4500);
+    } catch (e) {
+      toast('❌ ' + e.message, 4500);
+    }
+  }
+
+  function openScraperCookieModal() {
+    document.getElementById('scraperCookieModal').classList.add('active');
+    refreshScraperCookieStatus();
+  }
+
+  function closeScraperCookieModal() {
+    document.getElementById('scraperCookieModal').classList.remove('active');
+  }
+
+  async function pasteSyncScraperCookies() {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text || !text.trim()) {
+        toast('⚠️ Clipboard is empty!');
+        return;
+      }
+      document.getElementById('txtScraperCookies').value = text;
+      await saveScraperCookies();
+    } catch (err) {
+      toast('⚠️ Clipboard blocked (' + err.message + '). Paste into the box below.', 4000);
+    }
+  }
+
+  async function saveScraperCookies() {
+    const cookieData = document.getElementById('txtScraperCookies').value.trim();
+    const targetUrl = document.getElementById('scraperUrlInput')?.value.trim() || '';
+    if (!cookieData) {
+      toast('⚠️ Paste cookies first');
+      return;
+    }
+    try {
+      const r = await fetch('/scraper/save-cookies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookieData, targetUrl })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Failed to save cookies');
+      toast(`✅ Saved ${d.count} cookie(s) to cookies.txt!`);
+      refreshScraperCookieStatus();
+      fetchInfo();
+    } catch (e) {
+      toast('❌ ' + e.message, 4500);
+    }
+  }
+
+  function handleScraperCookieFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const content = e.target.result;
+      if (!content || !content.trim()) return;
+      document.getElementById('txtScraperCookies').value = content;
+      await saveScraperCookies();
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }
+
+  async function clearScraperCookies() {
+    const targetUrl = document.getElementById('scraperUrlInput')?.value.trim() || '';
+    try {
+      const r = await fetch('/scraper/clear-cookies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUrl })
+      });
+      const d = await r.json();
+      toast(`🗑 Removed ${d.removed || 0} cookie(s)`);
+      document.getElementById('txtScraperCookies').value = '';
+      refreshScraperCookieStatus();
+      fetchInfo();
+    } catch (e) {
+      toast('❌ ' + e.message);
     }
   }
 </script>
