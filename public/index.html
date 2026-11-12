@@ -2194,16 +2194,17 @@
     }
 
     // downloading or sniffing
-    const isSniffing = isScr && j.stage === 'sniffing' && (!j.progress || j.progress === 0);
-    const fillClass = isSniffing ? 'sniffing' : (isIg ? 'ig-fill' : isScr ? 'scr-fill' : '');
-    const statusLabel = isSniffing
-      ? 'Auto-Playing & Capturing Link'
+    const isSniffingStage = isScr && j.stage === 'sniffing';
+    const isSniffingShimmer = isSniffingStage && (!j.progress || j.progress === 0);
+    const fillClass = isSniffingShimmer ? 'sniffing' : (isIg ? 'ig-fill' : isScr ? 'scr-fill' : '');
+    const statusLabel = isSniffingStage
+      ? (j.progress > 0 ? 'Refreshing Expired Link & Resuming' : 'Auto-Playing & Capturing Link')
       : isIg
         ? 'Scraping & Downloading'
         : isScr
           ? 'Downloading Stream'
           : 'Downloading';
-    const pctText = isSniffing ? '…' : `${(j.progress || 0).toFixed(0)}%`;
+    const pctText = isSniffingShimmer ? '…' : `${(j.progress || 0).toFixed(0)}%`;
 
     return `
       <div class="job-status-row">

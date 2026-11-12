@@ -128,9 +128,25 @@ function scheduleSaveQueueState() {
 }
 
 // ── yt-dlp Worker Handler ────────────────────────────────────────────────────
+const STREAM_EXPIRED_RE = /(HTTP Error 410|410:\s*Gone|HTTP Error 403|403:\s*Forbidden|HTTP Error 401|401:\s*Unauthorized|Unable to download fragment)/i;
+
+function makeStreamExpiredError(message) {
+  const err = new Error(message || 'Stream link expired or stalled');
+  err.code = 'STREAM_EXPIRED';
+  return err;
+}
+
 function runYtdlpDownload(job) {
   return new Promise((resolve, reject) => {
-    const { url, resolvedHeaders, customOutputTitle, customOutputId, useCookies = true, abortSignal = null } = job.data;
+    const {
+      url,
+      resolvedHeaders,
+      customOutputTitle,
+      customOutputId,
+      useCookies = true,
+      abortSignal = null,
+      detectExpiry = false
+    } = job.data;
     const id = job.id;
 
     if (abortSignal && abortSignal.aborted) {
@@ -152,6 +168,7 @@ function runYtdlpDownload(job) {
 
     const args = [
       '--no-playlist',
+      '--concurrent-fragments', '4',
       '--socket-timeout', '20',
       '--retries', '3',
       '--fragment-retries', '3',
@@ -189,12 +206,63 @@ function runYtdlpDownload(job) {
 
     let progress = 0;
     let title = job.data.title || url;
+    let settled = false;
+    let expiredHitCount = 0;
+    let lastProgressAt = Date.now();
+    let stallTimer = null;
+
+    const killProc = () => {
+      try {
+        proc.kill('SIGTERM');
+        if (proc.pid) {
+          spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
+        }
+      } catch (_) {}
+    };
+
+    const cleanup = () => {
+      if (stallTimer) clearInterval(stallTimer);
+      activeProcesses.delete(id);
+      if (tempCookiesPath && fs.existsSync(tempCookiesPath)) {
+        try { fs.unlinkSync(tempCookiesPath); } catch (_) {}
+      }
+    };
+
+    const triggerExpired = (reason) => {
+      if (!detectExpiry || settled) return;
+      settled = true;
+      killProc();
+      cleanup();
+      reject(makeStreamExpiredError(reason));
+    };
+
+    if (detectExpiry) {
+      stallTimer = setInterval(() => {
+        if (settled) return;
+        if (Date.now() - lastProgressAt > 45000) {
+          triggerExpired('Download stalled for 45s without progress');
+        }
+      }, 5000);
+    }
+
+    const checkLineForExpiry = (line) => {
+      if (!detectExpiry || !line) return;
+      if (STREAM_EXPIRED_RE.test(line)) {
+        expiredHitCount++;
+        if (expiredHitCount >= 2) {
+          triggerExpired(`Stream token expired (${line.slice(0, 90)})`);
+        }
+      }
+    };
 
     proc.stdout.on('data', (chunk) => {
       const lines = chunk.toString().split(/[\r\n]+/);
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+
+        checkLineForExpiry(trimmed);
+        if (settled) return;
 
         // Custom template: "XX.X%|Title|Speed|ETA"
         if (trimmed.includes('|')) {
@@ -207,6 +275,8 @@ function runYtdlpDownload(job) {
             const num = parseFloat(pct.replace('%', ''));
             if (!isNaN(num)) {
               progress = num;
+              lastProgressAt = Date.now();
+              expiredHitCount = 0;
               const isGenericTitle = !extractedTitle || extractedTitle === 'NA' || /^(index|master|playlist|chunklist|video|stream)$/i.test(extractedTitle.trim());
               if (!customOutputTitle && !isGenericTitle) {
                 title = extractedTitle;
@@ -234,6 +304,9 @@ function runYtdlpDownload(job) {
           if (m) {
             progress = parseFloat(m[1]);
           }
+          if (!/Got error:|Retrying/i.test(trimmed)) {
+            lastProgressAt = Date.now();
+          }
           const item = jobs.get(id);
           if (item) {
             item.progress = progress;
@@ -259,7 +332,12 @@ function runYtdlpDownload(job) {
     proc.stderr.on('data', (chunk) => {
       const text = chunk.toString();
       stderrBuf += text;
-      const lastLine = text.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean).pop();
+      const lines = text.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean);
+      for (const l of lines) {
+        checkLineForExpiry(l);
+      }
+      if (settled) return;
+      const lastLine = lines[lines.length - 1];
       if (lastLine && !lastLine.includes('frame=') && !lastLine.includes('fps=')) {
         const item = jobs.get(id);
         if (item) { item.log = lastLine; }
@@ -267,24 +345,11 @@ function runYtdlpDownload(job) {
       }
     });
 
-    let settled = false;
-    const cleanup = () => {
-      activeProcesses.delete(id);
-      if (tempCookiesPath && fs.existsSync(tempCookiesPath)) {
-        try { fs.unlinkSync(tempCookiesPath); } catch (_) {}
-      }
-    };
-
     if (abortSignal) {
       abortSignal.addEventListener('abort', () => {
         if (settled) return;
         settled = true;
-        try {
-          proc.kill('SIGTERM');
-          if (proc.pid) {
-            spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
-          }
-        } catch (_) {}
+        killProc();
         cleanup();
         reject(new Error('Cancelled by user'));
       }, { once: true });
@@ -304,6 +369,9 @@ function runYtdlpDownload(job) {
           cleanErr = 'Instagram profiles cannot be downloaded via standard yt-dlp. Please use the Instagram Profile Downloader tab with your cookies.txt.';
         } else if (cleanErr.includes('empty media response') || cleanErr.includes('Instagram API is not granting access')) {
           cleanErr = 'Instagram requires login cookies. Please export cookies (including sessionid) to cookies.txt.';
+        }
+        if (detectExpiry && (STREAM_EXPIRED_RE.test(stderrBuf) || /timed out/i.test(cleanErr))) {
+          return reject(makeStreamExpiredError(cleanErr));
         }
         reject(new Error(cleanErr));
       }
@@ -418,57 +486,80 @@ async function runScrapeJob(job) {
   const controller = new AbortController();
   activeScrapeAborts.set(id, controller);
 
+  const MAX_REFRESH_ATTEMPTS = 5;
   try {
-    if (j) {
-      j.status = 'downloading';
-      j.stage = 'sniffing';
-      j.log = 'Opening muted tab & auto-clicking Play to capture stream...';
-      broadcast({ type: 'job', ...j });
-    }
-
-    const sniffed = await sniffMediaStream({
-      url: pageUrl,
-      mode,
-      cookiesFilePath: COOKIES,
-      abortSignal: controller.signal
-    });
-
-    if (j && j.status === 'cancelled') {
-      throw new Error('Cancelled by user');
-    }
-
-    const resolvedTitle = sniffed.title || presetTitle || pageUrl;
-    if (j) {
-      j.title = resolvedTitle;
-      j.streamUrl = sniffed.mediaUrl;
-      j.stage = 'downloading';
-      j.log = `Stream link captured via ${sniffed.via || 'browser'}! Starting yt-dlp download...`;
-      broadcast({ type: 'job', ...j });
-      scheduleSaveQueueState();
-    }
-
-    const result = await runYtdlpDownload({
-      id,
-      data: {
-        url: sniffed.mediaUrl,
-        title: resolvedTitle,
-        customOutputTitle: resolvedTitle,
-        customOutputId: extractOutputIdFromUrl(pageUrl),
-        useCookies,
-        abortSignal: controller.signal,
-        resolvedHeaders: {
-          referer: sniffed.referer,
-          userAgent: sniffed.userAgent,
-          cookieHeader: sniffed.cookieHeader
-        }
+    let lastError = null;
+    for (let attempt = 1; attempt <= MAX_REFRESH_ATTEMPTS; attempt++) {
+      if (controller.signal.aborted || (j && j.status === 'cancelled')) {
+        throw new Error('Cancelled by user');
       }
-    });
 
-    return {
-      ...result,
-      title: resolvedTitle,
-      streamUrl: sniffed.mediaUrl
-    };
+      if (j) {
+        j.status = 'downloading';
+        j.stage = 'sniffing';
+        j.log = attempt === 1
+          ? 'Opening muted tab & auto-clicking Play to capture stream...'
+          : `🔄 Stream expired/stalled — reopening page for fresh link (attempt ${attempt}/${MAX_REFRESH_ATTEMPTS})...`;
+        broadcast({ type: 'job', ...j });
+      }
+
+      const sniffed = await sniffMediaStream({
+        url: pageUrl,
+        mode,
+        cookiesFilePath: COOKIES,
+        abortSignal: controller.signal
+      });
+
+      if (j && j.status === 'cancelled') {
+        throw new Error('Cancelled by user');
+      }
+
+      const resolvedTitle = sniffed.title || presetTitle || pageUrl;
+      if (j) {
+        j.title = resolvedTitle;
+        j.streamUrl = sniffed.mediaUrl;
+        j.stage = 'downloading';
+        j.log = attempt === 1
+          ? `Stream link captured via ${sniffed.via || 'browser'}! Starting yt-dlp download...`
+          : `🔄 Fresh stream link captured (attempt ${attempt}/${MAX_REFRESH_ATTEMPTS})! Resuming download...`;
+        broadcast({ type: 'job', ...j });
+        scheduleSaveQueueState();
+      }
+
+      try {
+        const result = await runYtdlpDownload({
+          id,
+          data: {
+            url: sniffed.mediaUrl,
+            title: resolvedTitle,
+            customOutputTitle: resolvedTitle,
+            customOutputId: extractOutputIdFromUrl(pageUrl),
+            useCookies,
+            detectExpiry: true,
+            abortSignal: controller.signal,
+            resolvedHeaders: {
+              referer: sniffed.referer,
+              userAgent: sniffed.userAgent,
+              cookieHeader: sniffed.cookieHeader
+            }
+          }
+        });
+
+        return {
+          ...result,
+          title: resolvedTitle,
+          streamUrl: sniffed.mediaUrl
+        };
+      } catch (dlErr) {
+        lastError = dlErr;
+        if (dlErr && dlErr.code === 'STREAM_EXPIRED' && attempt < MAX_REFRESH_ATTEMPTS && !controller.signal.aborted) {
+          console.log(`  🔄 [${id}] ${dlErr.message} — refreshing stream URL (attempt ${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`);
+          continue;
+        }
+        throw dlErr;
+      }
+    }
+    throw lastError || new Error('Download failed after stream refresh attempts.');
   } finally {
     activeScrapeAborts.delete(id);
   }
