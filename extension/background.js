@@ -176,7 +176,8 @@ async function handleScanTask(url) {
   }
 }
 
-async function handleSniffTask(url) {
+async function handleSniffTask(url, options = {}) {
+  const excludeUrls = Array.isArray(options && options.excludeUrls) ? options.excludeUrls : [];
   const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
   await chrome.tabs.update(tab.id, { muted: true }).catch(() => {});
   const tabId = tab.id;
@@ -236,6 +237,7 @@ async function handleSniffTask(url) {
     };
 
     const consider = (candUrl, mimeType, headers = {}) => {
+      if (excludeUrls.includes(candUrl)) return;
       const prio = classifyStreamCandidate(candUrl, mimeType);
       if (prio <= 0) return;
 
@@ -408,11 +410,11 @@ async function pollLoop() {
       const payload = await res.json();
 
       if (payload && payload.hasTask && payload.task) {
-        const { taskId, action, url } = payload.task;
+        const { taskId, action, url, options } = payload.task;
         try {
           let data;
           if (action === 'scan') data = await handleScanTask(url);
-          else if (action === 'sniff') data = await handleSniffTask(url);
+          else if (action === 'sniff') data = await handleSniffTask(url, options || {});
           else throw new Error('Unknown task action: ' + action);
 
           await fetch(`${SERVER_BASE}/scraper/bridge/result`, {

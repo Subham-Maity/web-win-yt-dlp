@@ -191,13 +191,6 @@ function findExistingDownload(pageUrl, title = '') {
     return null;
   }
 
-  // If incomplete .part or .ytdl files exist for this ID, do not treat as finished
-  if (outputId) {
-    const idMarker = `[${sanitizeFileName(outputId)}]`;
-    const hasPartial = files.some(f => f.includes(idMarker) && (/\.part/i.test(f) || /\.ytdl$/i.test(f)));
-    if (hasPartial) return null;
-  }
-
   const completedFiles = files.filter(f => {
     if (!COMPLETED_MEDIA_RE.test(f)) return false;
     try {
@@ -212,7 +205,21 @@ function findExistingDownload(pageUrl, title = '') {
   if (outputId) {
     const idMarker = `[${sanitizeFileName(outputId)}]`;
     const byId = completedFiles.find(f => f.includes(idMarker));
-    if (byId) return byId;
+    if (byId) {
+      // Completed media is already saved; clean up any orphaned temp/part/ytdl files for this ID
+      try {
+        for (const f of files) {
+          if (f.includes(idMarker) && (/\.part/i.test(f) || /\.ytdl$/i.test(f))) {
+            try { fs.unlinkSync(path.join(DOWNLOAD_DIR, f)); } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      return byId;
+    }
+
+    // Only reject as unfinished if incomplete .part/.ytdl files exist AND no completed file was found
+    const hasPartial = files.some(f => f.includes(idMarker) && (/\.part/i.test(f) || /\.ytdl$/i.test(f)));
+    if (hasPartial) return null;
   }
 
   // 2. Check archive entry & confirm a corresponding file still exists on disk
@@ -269,6 +276,25 @@ function cleanupPartialFilesForId(customId) {
   return removed;
 }
 
+function cleanupBrokenFragFiles(customId) {
+  const safeId = sanitizeFileName(customId);
+  if (!safeId) return 0;
+  let removed = 0;
+  try {
+    const marker = `[${safeId}]`;
+    const files = fs.readdirSync(DOWNLOAD_DIR);
+    for (const f of files) {
+      if (f.includes(marker) && f.includes('part-Frag')) {
+        try {
+          fs.unlinkSync(path.join(DOWNLOAD_DIR, f));
+          removed++;
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return removed;
+}
+
 function runYtdlpDownload(job) {
   return new Promise((resolve, reject) => {
     const {
@@ -296,6 +322,12 @@ function runYtdlpDownload(job) {
 
     const safeCustomTitle = sanitizeFileName(customOutputTitle);
     const safeCustomId = sanitizeFileName(customOutputId);
+
+    // Wipe any leftover 0-byte or corrupted in-flight fragment files so yt-dlp won't crash on [Errno 2]
+    if (safeCustomId) {
+      cleanupBrokenFragFiles(safeCustomId);
+    }
+
     const outTemplate = safeCustomTitle
       ? path.join(DOWNLOAD_DIR, `${safeCustomTitle} [${safeCustomId || '%(id)s'}].%(ext)s`)
       : path.join(DOWNLOAD_DIR, '%(title)s [%(id)s].%(ext)s');
@@ -304,8 +336,11 @@ function runYtdlpDownload(job) {
       '--no-playlist',
       '--concurrent-fragments', '1',
       '--socket-timeout', '20',
-      '--retries', '3',
-      '--fragment-retries', '3',
+      '--retries', '5',
+      '--fragment-retries', '5',
+      '--file-access-retries', '10',
+      '--retry-sleep', 'file_access:linear=1::2',
+      '--windows-filenames',
       '--js-runtimes', `node:${process.execPath}`,
       '-o', outTemplate,
       '--newline',
@@ -493,13 +528,80 @@ function runYtdlpDownload(job) {
       }, { once: true });
     }
 
-    proc.on('close', (code) => {
+    proc.on('close', async (code) => {
       if (settled) return;
       settled = true;
       cleanup();
       if (code === 0) {
+        // Clean up any leftover .ytdl file
+        if (customOutputId) {
+          try {
+            const files = fs.readdirSync(DOWNLOAD_DIR);
+            const marker = `[${sanitizeFileName(customOutputId)}]`;
+            for (const f of files) {
+              if (f.includes(marker) && /\.ytdl$/i.test(f)) {
+                try { fs.unlinkSync(path.join(DOWNLOAD_DIR, f)); } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        }
         resolve({ title, progress: 100 });
       } else {
+        // Check for Windows [WinError 32] rename lock:
+        // Even if yt-dlp exited with error, the file download may have fully finished,
+        // and Windows Defender/antivirus just held a temporary lock during the final rename.
+        if (/unable to rename file|WinError 32/i.test(stderrBuf)) {
+          console.log(`  🛡️ [${id}] Windows rename lock detected: attempting safe Node rename fallback...`);
+          let resolvedByRename = false;
+          let dstTarget = '';
+          let srcPart = '';
+
+          const renameMatch = stderrBuf.match(/Unable to rename file.*?\s*'([^']+)'\s*->\s*'([^']+)'/i);
+          if (renameMatch && renameMatch[1] && renameMatch[2]) {
+            srcPart = renameMatch[1].trim();
+            dstTarget = renameMatch[2].trim();
+          } else if (customOutputId) {
+            try {
+              const files = fs.readdirSync(DOWNLOAD_DIR);
+              const marker = `[${sanitizeFileName(customOutputId)}]`;
+              const foundPart = files.find(f => f.includes(marker) && /\.part$/i.test(f) && !f.includes('part-Frag'));
+              if (foundPart) {
+                srcPart = path.join(DOWNLOAD_DIR, foundPart);
+                dstTarget = srcPart.replace(/\.part$/i, '');
+              }
+            } catch (_) {}
+          }
+
+          if (srcPart || dstTarget) {
+            for (let r = 0; r < 8; r++) {
+              await new Promise(res => setTimeout(res, 1000));
+              try {
+                if (dstTarget && fs.existsSync(dstTarget) && fs.statSync(dstTarget).size > 102400) {
+                  resolvedByRename = true;
+                  if (srcPart && fs.existsSync(srcPart)) {
+                    try { fs.unlinkSync(srcPart); } catch (_) {}
+                  }
+                  break;
+                }
+                if (srcPart && fs.existsSync(srcPart)) {
+                  fs.renameSync(srcPart, dstTarget);
+                  resolvedByRename = true;
+                  break;
+                }
+              } catch (_) {}
+            }
+          }
+
+          if (resolvedByRename && dstTarget && fs.existsSync(dstTarget)) {
+            console.log(`  ✅ [${id}] Successfully renamed locked file on disk: ${path.basename(dstTarget)}`);
+            try {
+              const ytdlFile = dstTarget + '.ytdl';
+              if (fs.existsSync(ytdlFile)) fs.unlinkSync(ytdlFile);
+            } catch (_) {}
+            return resolve({ title, progress: 100 });
+          }
+        }
+
         const errLines = stderrBuf.split('\n').map(l => l.trim()).filter(Boolean);
         const lastErr = errLines.reverse().find(l => l.includes('ERROR') || l.includes('error') || l.includes('Unable') || l.includes('Sign in') || l.includes('429')) || errLines[0] || `exit code ${code}`;
         let cleanErr = lastErr.replace(/^ERROR:\s*/i, '');
@@ -643,12 +745,18 @@ async function runScrapeJob(job) {
 
   const MAX_REFRESH_ATTEMPTS = 5;
   let forceNoContinue = false;
+  let currentMediaUrl = '';
+  const excludeUrls = [];
 
   try {
     let lastError = null;
     for (let attempt = 1; attempt <= MAX_REFRESH_ATTEMPTS; attempt++) {
       if (controller.signal.aborted || (j && j.status === 'cancelled')) {
         throw new Error('Cancelled by user');
+      }
+
+      if (currentMediaUrl && !excludeUrls.includes(currentMediaUrl)) {
+        excludeUrls.push(currentMediaUrl);
       }
 
       if (j) {
@@ -668,7 +776,8 @@ async function runScrapeJob(job) {
           url: pageUrl,
           mode,
           cookiesFilePath: COOKIES,
-          abortSignal: controller.signal
+          abortSignal: controller.signal,
+          excludeUrls: attempt > 1 ? excludeUrls : []
         });
       } catch (sniffErr) {
         lastError = sniffErr;
@@ -687,6 +796,7 @@ async function runScrapeJob(job) {
         throw new Error('Cancelled by user');
       }
 
+      currentMediaUrl = sniffed.mediaUrl;
       const resolvedTitle = sniffed.title || presetTitle || pageUrl;
       if (j) {
         j.title = resolvedTitle;
@@ -735,22 +845,43 @@ async function runScrapeJob(job) {
       } catch (dlErr) {
         lastError = dlErr;
         if (dlErr && dlErr.code === 'FRAG_CORRUPT' && attempt < MAX_REFRESH_ATTEMPTS && !controller.signal.aborted) {
-          const removed = cleanupPartialFilesForId(outputId);
-          forceNoContinue = true;
-          if (j) {
-            j.progress = 0;
-            j.log = `🔄 Fragment mismatch detected (cleaned ${removed} temp file(s)) — grabbing fresh link & restarting clean (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
-            broadcast({ type: 'job', ...j });
+          if (attempt >= 2) {
+            const removed = cleanupPartialFilesForId(outputId);
+            forceNoContinue = true;
+            if (j) {
+              j.progress = 0;
+              j.log = `🔄 Fragment mismatch detected (cleaned ${removed} temp file(s)) — grabbing fresh link & restarting clean (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
+              broadcast({ type: 'job', ...j });
+            }
+          } else {
+            cleanupBrokenFragFiles(outputId);
+            if (j) {
+              j.log = `🔄 Incomplete fragment file cleared — retrying download (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
+              broadcast({ type: 'job', ...j });
+            }
           }
-          console.log(`  🔄 [${id}] Fragment error (${dlErr.message}) — cleaned ${removed} part files, retrying clean (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})`);
+          console.log(`  🔄 [${id}] Fragment error (${dlErr.message}) — retrying (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})`);
+          await new Promise(r => setTimeout(r, 1000));
           continue;
         }
         if (dlErr && dlErr.code === 'STREAM_EXPIRED' && attempt < MAX_REFRESH_ATTEMPTS && !controller.signal.aborted) {
-          if (j) {
-            j.log = `🔄 Stream expired/stalled — reopening browser for fresh link (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
-            broadcast({ type: 'job', ...j });
+          if (attempt >= 4) {
+            const removed = cleanupPartialFilesForId(outputId);
+            forceNoContinue = true;
+            if (j) {
+              j.progress = 0;
+              j.log = `🔄 Repeated stream expiry — resetting download files (${removed} removed) and restarting from scratch (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
+              broadcast({ type: 'job', ...j });
+            }
+          } else {
+            cleanupBrokenFragFiles(outputId);
+            if (j) {
+              j.log = `🔄 Stream token expired — refreshing link in browser to resume remaining chunks (${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`;
+              broadcast({ type: 'job', ...j });
+            }
           }
           console.log(`  🔄 [${id}] ${dlErr.message} — refreshing stream URL (attempt ${attempt + 1}/${MAX_REFRESH_ATTEMPTS})...`);
+          await new Promise(r => setTimeout(r, 1000));
           continue;
         }
         throw dlErr;

@@ -699,7 +699,7 @@ async function runCdpScan(url, cookiesFilePath) {
   }
 }
 
-async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal = null) {
+async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal = null, { excludeUrls = [] } = {}) {
   if (abortSignal && abortSignal.aborted) {
     throw new Error('Cancelled by user');
   }
@@ -719,6 +719,8 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
     await sendCdpCommand(pageWs, ++cmdId, 'Page.enable');
     await sendCdpCommand(pageWs, ++cmdId, 'Network.enable');
     await sendCdpCommand(pageWs, ++cmdId, 'Runtime.enable');
+    await sendCdpCommand(pageWs, ++cmdId, 'Network.setCacheDisabled', { cacheDisabled: true }).catch(() => {});
+    await sendCdpCommand(pageWs, ++cmdId, 'Network.clearBrowserCache').catch(() => {});
 
     const fileCookies = getCookiesForUrl(cookiesFilePath, url);
     if (fileCookies.length > 0) {
@@ -805,7 +807,16 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
         else fail(new Error('Timed out waiting for video stream request on page.'));
       }, timeoutMs);
 
+      const isExcluded = (candidateUrl) => {
+        if (!candidateUrl || !Array.isArray(excludeUrls) || excludeUrls.length === 0) return false;
+        return excludeUrls.some(ex => {
+          if (!ex) return false;
+          return candidateUrl === ex;
+        });
+      };
+
       const considerCandidate = (candUrl, mimeType, reqHeaders = {}) => {
+        if (isExcluded(candUrl)) return;
         const prio = classifyStreamCandidate(candUrl, mimeType);
         if (prio <= 0) return;
 
@@ -843,7 +854,7 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
       // Periodically mute, auto-click Play (trusted CDP mouse click + DOM play), & inspect <video> src
       let autoClickCount = 0;
       playInterval = setInterval(async () => {
-        if (settled || bestCandidate) return;
+        if (settled || (bestCandidate && !isExcluded(bestCandidate.url))) return;
         try {
           const evalOut = await sendCdpCommand(pageWs, ++cmdId, 'Runtime.evaluate', {
             expression: `(() => {
@@ -953,10 +964,10 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
           });
 
           const val = evalOut && evalOut.result && evalOut.result.value;
-          if (val && val.foundSrc) {
+          if (val && val.foundSrc && !isExcluded(val.foundSrc)) {
             considerCandidate(val.foundSrc, '', { Referer: url });
           }
-          if (!bestCandidate && val && val.clickPoint && autoClickCount < 4) {
+          if ((!bestCandidate || isExcluded(bestCandidate.url)) && val && val.clickPoint && autoClickCount < 4) {
             autoClickCount++;
             const { x, y } = val.clickPoint;
             if (x > 0 && y > 0) {
@@ -969,8 +980,8 @@ async function runCdpSniff(url, cookiesFilePath, timeoutMs = 35000, abortSignal 
       }, 2000);
 
       reloadTimer = setTimeout(() => {
-        if (!settled && !bestCandidate && autoClickCount === 0) {
-          sendCdpCommand(pageWs, ++cmdId, 'Page.reload', { ignoreCache: false }).catch(() => {});
+        if (!settled && (!bestCandidate || isExcluded(bestCandidate.url))) {
+          sendCdpCommand(pageWs, ++cmdId, 'Page.reload', { ignoreCache: true }).catch(() => {});
         }
       }, 18000);
 
@@ -1007,13 +1018,13 @@ async function scanWebpage({ url, mode = 'auto', cookiesFilePath }) {
   return { ...data, via: 'cdp' };
 }
 
-async function sniffMediaStream({ url, mode = 'auto', cookiesFilePath, abortSignal = null }) {
+async function sniffMediaStream({ url, mode = 'auto', cookiesFilePath, abortSignal = null, excludeUrls = [] }) {
   if (!url || typeof url !== 'string') {
     throw new Error('Valid video page URL is required.');
   }
 
-  // If the URL itself is already a direct stream file, no sniffing needed
-  if (/\.(m3u8|mpd|mp4|webm|mov)(\?|$)/i.test(url)) {
+  // If the URL itself is already a direct stream file, no sniffing needed unless excluded
+  if (/\.(m3u8|mpd|mp4|webm|mov)(\?|$)/i.test(url) && (!excludeUrls || !excludeUrls.includes(url))) {
     return {
       mediaUrl: url,
       title: '',
@@ -1030,11 +1041,11 @@ async function sniffMediaStream({ url, mode = 'auto', cookiesFilePath, abortSign
   }
 
   if (useExt) {
-    const data = await dispatchBridgeTask('sniff', url, {}, 50000, abortSignal);
+    const data = await dispatchBridgeTask('sniff', url, { excludeUrls }, 50000, abortSignal);
     return { ...data, via: 'extension' };
   }
 
-  const data = await runCdpSniff(url, cookiesFilePath, 45000, abortSignal);
+  const data = await runCdpSniff(url, cookiesFilePath, 45000, abortSignal, { excludeUrls });
   return { ...data, via: 'cdp' };
 }
 
