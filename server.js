@@ -412,14 +412,18 @@ function runYtdlpDownload(job) {
     if (detectExpiry) {
       stallTimer = setInterval(() => {
         if (settled) return;
-        if (Date.now() - lastProgressAt > 45000) {
-          triggerExpired('Download stalled for 45s without progress');
+        // Never stall-abort when the download has reached 98%+ (it is finalizing or renaming)
+        if (progress >= 98) return;
+        if (Date.now() - lastProgressAt > 90000) {
+          triggerExpired('Download stalled for 90s without progress');
         }
       }, 5000);
     }
 
     const checkLineForExpiry = (line) => {
       if (!detectExpiry || !line) return;
+      // Never abort for stream expiry if already at 98%+ (all video fragments downloaded)
+      if (progress >= 98) return;
       if (STREAM_EXPIRED_RE.test(line)) {
         expiredHitCount++;
         if (expiredHitCount >= 2) {
@@ -532,7 +536,7 @@ function runYtdlpDownload(job) {
       if (settled) return;
       settled = true;
       cleanup();
-      if (code === 0) {
+      if (code === 0 || progress >= 98) {
         // Clean up any leftover .ytdl file
         if (customOutputId) {
           try {
@@ -545,7 +549,31 @@ function runYtdlpDownload(job) {
             }
           } catch (_) {}
         }
-        resolve({ title, progress: 100 });
+
+        // Ensure that if .part still exists on disk, it gets safely renamed to .mp4
+        if (customOutputId) {
+          try {
+            const files = fs.readdirSync(DOWNLOAD_DIR);
+            const marker = `[${sanitizeFileName(customOutputId)}]`;
+            const partFile = files.find(f => f.includes(marker) && /\.part$/i.test(f) && !f.includes('part-Frag'));
+            if (partFile) {
+              const src = path.join(DOWNLOAD_DIR, partFile);
+              const dst = src.replace(/\.part$/i, '');
+              if (!fs.existsSync(dst)) {
+                for (let r = 0; r < 5; r++) {
+                  try {
+                    fs.renameSync(src, dst);
+                    break;
+                  } catch (_) {
+                    await new Promise(res => setTimeout(res, 1000));
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
+        return resolve({ title, progress: 100 });
       } else {
         // Check for Windows [WinError 32] rename lock:
         // Even if yt-dlp exited with error, the file download may have fully finished,
@@ -807,6 +835,34 @@ async function runScrapeJob(job) {
           : `🔄 Fresh stream link captured (attempt ${attempt}/${MAX_REFRESH_ATTEMPTS})! ${forceNoContinue ? 'Restarting clean download...' : 'Resuming download...'}`;
         broadcast({ type: 'job', ...j });
         scheduleSaveQueueState();
+      }
+
+      if (attempt > 1 && outputId) {
+        try {
+          const files = fs.readdirSync(DOWNLOAD_DIR);
+          const marker = `[${sanitizeFileName(outputId)}]`;
+          const partFile = files.find(f => f.includes(marker) && /\.part$/i.test(f) && !f.includes('part-Frag'));
+          const ytdlFile = files.find(f => f.includes(marker) && /\.ytdl$/i.test(f));
+
+          if (partFile && !ytdlFile) {
+            // .part exists but .ytdl is missing:
+            // If previous progress reached 98%+, all fragments were already downloaded! Finalize directly!
+            if (j && j.progress >= 98) {
+              const src = path.join(DOWNLOAD_DIR, partFile);
+              const dst = src.replace(/\.part$/i, '');
+              try { fs.renameSync(src, dst); } catch (_) {}
+              if (fs.existsSync(dst) && fs.statSync(dst).size > 102400) {
+                recordScrapedDownload({ pageUrl, outputId, title: resolvedTitle, fileName: path.basename(dst) });
+                return { title: resolvedTitle, progress: 100, streamUrl: sniffed.mediaUrl };
+              }
+            } else {
+              // Without .ytdl, yt-dlp would restart from fragment 0 and duplicate chunks into .part.
+              // Wipe the incomplete file and start clean from 0%.
+              cleanupPartialFilesForId(outputId);
+              forceNoContinue = true;
+            }
+          }
+        } catch (_) {}
       }
 
       try {
