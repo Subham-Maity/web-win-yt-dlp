@@ -276,18 +276,32 @@ function cleanupPartialFilesForId(customId) {
   return removed;
 }
 
-function cleanupBrokenFragFiles(customId) {
-  const safeId = sanitizeFileName(customId);
-  if (!safeId) return 0;
+function cleanupBrokenFragFiles(customId, targetFilePath = '') {
   let removed = 0;
   try {
-    const marker = `[${safeId}]`;
+    if (targetFilePath && fs.existsSync(targetFilePath)) {
+      try {
+        fs.unlinkSync(targetFilePath);
+        removed++;
+      } catch (_) {}
+    }
+    const safeId = sanitizeFileName(customId);
     const files = fs.readdirSync(DOWNLOAD_DIR);
     for (const f of files) {
-      if (f.includes(marker) && f.includes('part-Frag')) {
+      if (!f.includes('part-Frag')) continue;
+      if (safeId && f.includes(`[${safeId}]`)) {
         try {
           fs.unlinkSync(path.join(DOWNLOAD_DIR, f));
           removed++;
+        } catch (_) {}
+      } else if (!safeId) {
+        try {
+          const fullP = path.join(DOWNLOAD_DIR, f);
+          const st = fs.statSync(fullP);
+          if (Date.now() - st.mtimeMs > 60000 || st.size === 0) {
+            fs.unlinkSync(fullP);
+            removed++;
+          }
         } catch (_) {}
       }
     }
@@ -321,7 +335,8 @@ function runYtdlpDownload(job) {
     }
 
     const safeCustomTitle = sanitizeFileName(customOutputTitle);
-    const safeCustomId = sanitizeFileName(customOutputId);
+    const outputId = customOutputId || extractOutputIdFromUrl(url);
+    const safeCustomId = sanitizeFileName(outputId);
 
     // Wipe any leftover 0-byte or corrupted in-flight fragment files so yt-dlp won't crash on [Errno 2]
     if (safeCustomId) {
@@ -538,10 +553,10 @@ function runYtdlpDownload(job) {
       cleanup();
       if (code === 0 || progress >= 98) {
         // Clean up any leftover .ytdl file
-        if (customOutputId) {
+        if (safeCustomId) {
           try {
             const files = fs.readdirSync(DOWNLOAD_DIR);
-            const marker = `[${sanitizeFileName(customOutputId)}]`;
+            const marker = `[${safeCustomId}]`;
             for (const f of files) {
               if (f.includes(marker) && /\.ytdl$/i.test(f)) {
                 try { fs.unlinkSync(path.join(DOWNLOAD_DIR, f)); } catch (_) {}
@@ -551,10 +566,10 @@ function runYtdlpDownload(job) {
         }
 
         // Ensure that if .part still exists on disk, it gets safely renamed to .mp4
-        if (customOutputId) {
+        if (safeCustomId) {
           try {
             const files = fs.readdirSync(DOWNLOAD_DIR);
-            const marker = `[${sanitizeFileName(customOutputId)}]`;
+            const marker = `[${safeCustomId}]`;
             const partFile = files.find(f => f.includes(marker) && /\.part$/i.test(f) && !f.includes('part-Frag'));
             if (partFile) {
               const src = path.join(DOWNLOAD_DIR, partFile);
@@ -584,14 +599,14 @@ function runYtdlpDownload(job) {
           let dstTarget = '';
           let srcPart = '';
 
-          const renameMatch = stderrBuf.match(/Unable to rename file.*?\s*'([^']+)'\s*->\s*'([^']+)'/i);
+          const renameMatch = stderrBuf.match(/Unable to rename file[\s\S]*?'([^']+)'\s*->\s*'([^']+)'/i);
           if (renameMatch && renameMatch[1] && renameMatch[2]) {
-            srcPart = renameMatch[1].trim();
-            dstTarget = renameMatch[2].trim();
-          } else if (customOutputId) {
+            srcPart = renameMatch[1].trim().replace(/\\\\/g, '\\');
+            dstTarget = renameMatch[2].trim().replace(/\\\\/g, '\\').replace(/['"].*$/, '');
+          } else if (safeCustomId) {
             try {
               const files = fs.readdirSync(DOWNLOAD_DIR);
-              const marker = `[${sanitizeFileName(customOutputId)}]`;
+              const marker = `[${safeCustomId}]`;
               const foundPart = files.find(f => f.includes(marker) && /\.part$/i.test(f) && !f.includes('part-Frag'));
               if (foundPart) {
                 srcPart = path.join(DOWNLOAD_DIR, foundPart);
@@ -627,6 +642,19 @@ function runYtdlpDownload(job) {
               if (fs.existsSync(ytdlFile)) fs.unlinkSync(ytdlFile);
             } catch (_) {}
             return resolve({ title, progress: 100 });
+          }
+        }
+
+        // Clean up broken fragment file if mentioned in error
+        if (/part-Frag/i.test(stderrBuf)) {
+          const fragMatch = stderrBuf.match(/['"]([^'"]+part-Frag\d+)['"]/i);
+          if (fragMatch && fragMatch[1]) {
+            try {
+              const matchedFrag = fragMatch[1].replace(/\\\\/g, '\\');
+              cleanupBrokenFragFiles(safeCustomId, matchedFrag);
+            } catch (_) {}
+          } else {
+            cleanupBrokenFragFiles(safeCustomId);
           }
         }
 
@@ -1372,11 +1400,19 @@ app.delete('/job/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// ── Clear finished/errored jobs ───────────────────────────────────────────────
-app.post('/clear', async (_req, res) => {
+// ── Clear finished downloads (preserves failed jobs so user doesn't lose links) ────
+app.post('/clear', async (req, res) => {
+  const includeFailed = Boolean(req.body && req.body.includeFailed);
   for (const [id, job] of jobs) {
-    if (['done', 'error', 'cancelled'].includes(job.status)) {
-      jobs.delete(id);
+    if (includeFailed) {
+      if (['done', 'error', 'cancelled'].includes(job.status)) {
+        jobs.delete(id);
+      }
+    } else {
+      // PRESERVE failed ('error') and active downloads so the user NEVER loses failed links!
+      if (job.status === 'done') {
+        jobs.delete(id);
+      }
     }
   }
 
@@ -1385,9 +1421,9 @@ app.post('/clear', async (_req, res) => {
       await Promise.race([
         Promise.all([
           downloadQueue.clean(0, 100, 'completed'),
-          downloadQueue.clean(0, 100, 'failed'),
+          includeFailed ? downloadQueue.clean(0, 100, 'failed') : Promise.resolve(),
           scrapeQueue.clean(0, 100, 'completed'),
-          scrapeQueue.clean(0, 100, 'failed')
+          includeFailed ? scrapeQueue.clean(0, 100, 'failed') : Promise.resolve()
         ]),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
       ]);
@@ -1395,8 +1431,8 @@ app.post('/clear', async (_req, res) => {
   }
 
   saveQueueStateNow();
-  broadcast({ type: 'cleared' });
-  res.json({ ok: true });
+  broadcast({ type: 'cleared', includeFailed });
+  res.json({ ok: true, includeFailed });
 });
 
 // ── Clear ENTIRE queue (stuck, queued, downloading, finished) ─────────────────
@@ -1744,23 +1780,124 @@ app.post('/scraper/download', async (req, res) => {
   res.json({ ok: true, started, skippedCount, jobs: createdJobs });
 });
 
-app.post('/scraper/retry/:id', async (req, res) => {
+app.post(['/jobs/retry/:id', '/scraper/retry/:id'], async (req, res) => {
   const old = jobs.get(req.params.id);
-  if (!old || old.type !== 'web_scrape') {
-    return res.status(404).json({ error: 'Scrape job not found.' });
+  if (!old) {
+    return res.status(404).json({ error: 'Job not found.' });
   }
   const redisOk = await isRedisAlive();
-  const jobData = await enqueueScrapeJob({
-    pageUrl: old.url,
+
+  if (old.type === 'web_scrape') {
+    const jobData = await enqueueScrapeJob({
+      pageUrl: old.url,
+      title: old.title || old.url,
+      mode: old.mode || 'auto',
+      useCookies: old.useCookies !== false,
+      skipExisting: false,
+      queueIndex: old.queueIndex || 1,
+      queueTotal: old.queueTotal || 1,
+      redisOk
+    });
+    return res.json({ ok: true, job: jobData });
+  }
+
+  if (old.type === 'instagram_profile') {
+    const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const username = old.username || extractInstagramUsername(old.url) || 'unknown';
+    const jobData = {
+      id,
+      type: 'instagram_profile',
+      username,
+      url: old.url || `https://www.instagram.com/${username}/`,
+      status: redisOk ? 'queued' : 'downloading',
+      progress: 0,
+      title: old.title || `Instagram Profile: @${username}`,
+      log: redisOk ? 'Queued in BullMQ worker...' : 'Starting profile download...',
+      error: '',
+      badge: 'Instagram Profile Download'
+    };
+    jobs.set(id, jobData);
+    broadcast({ type: 'job', ...jobData });
+    scheduleSaveQueueState();
+
+    if (redisOk) {
+      try {
+        await Promise.race([
+          downloadQueue.add('instagram_profile', {
+            type: 'instagram_profile',
+            username,
+            cookieSource: 'cookies.txt',
+            profileUrl: old.url
+          }, { jobId: id }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+        ]);
+      } catch (err) {
+        console.warn('⚠️ BullMQ add error on retry for IG profile:', err.message);
+      }
+    }
+    return res.json({ ok: true, job: jobData });
+  }
+
+  // Standard Video Download
+  const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const jobData = {
+    id,
+    type: 'standard',
+    url: old.url,
+    status: redisOk ? 'queued' : 'downloading',
+    progress: 0,
     title: old.title || old.url,
-    mode: old.mode || 'auto',
-    useCookies: old.useCookies !== false,
-    skipExisting: false,
-    queueIndex: old.queueIndex || 1,
-    queueTotal: old.queueTotal || 1,
-    redisOk
-  });
-  res.json({ ok: true, job: jobData });
+    log: redisOk ? 'Queued in BullMQ worker...' : 'Starting download directly...',
+    error: '',
+    badge: 'Video Download'
+  };
+
+  const runDirectStandard = () => {
+    jobData.status = 'downloading';
+    jobData.log = 'Starting download directly...';
+    broadcast({ type: 'job', ...jobData });
+    runYtdlpDownload({ id, data: { url: old.url } })
+      .then((result) => {
+        jobData.status = 'done';
+        jobData.progress = 100;
+        jobData.title = result.title || jobData.title;
+        jobData.log = 'Download complete. File saved to Downloads/yt-dlp/';
+        broadcast({ type: 'job', ...jobData });
+        scheduleSaveQueueState();
+      })
+      .catch((e) => {
+        jobData.status = 'error';
+        jobData.error = e.message;
+        jobData.log = 'Failed: ' + e.message;
+        broadcast({ type: 'job', ...jobData });
+        scheduleSaveQueueState();
+      });
+  };
+
+  if (redisOk) {
+    jobData.status = 'queued';
+    jobData.log = 'Queued in BullMQ worker...';
+    jobs.set(id, jobData);
+    broadcast({ type: 'job', ...jobData });
+    scheduleSaveQueueState();
+
+    try {
+      await Promise.race([
+        downloadQueue.add('standard', { type: 'standard', url: old.url }, { jobId: id }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+      ]);
+    } catch (err) {
+      console.warn('⚠️ BullMQ add error on retry, running direct:', err.message);
+      runDirectStandard();
+    }
+  } else {
+    jobs.set(id, jobData);
+    broadcast({ type: 'job', ...jobData });
+    scheduleSaveQueueState();
+    runDirectStandard();
+  }
+
+  return res.json({ ok: true, job: jobData });
 });
 
 app.post('/scraper/open-browser', async (req, res) => {

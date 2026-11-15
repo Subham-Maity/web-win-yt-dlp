@@ -771,6 +771,19 @@
       box-shadow: 0 4px 16px rgba(239, 68, 68, 0.35);
     }
 
+    .btn-warning {
+      background: rgba(245, 158, 11, 0.12);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .btn-warning:hover {
+      background: rgba(245, 158, 11, 0.25);
+      color: #fff;
+      border-color: #f59e0b;
+      box-shadow: 0 4px 16px rgba(245, 158, 11, 0.35);
+    }
+
     .btn-sm {
       padding: 6px 14px;
       font-size: 0.78rem;
@@ -925,6 +938,13 @@
       margin-bottom: 3px;
     }
 
+    .job-url-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 3px;
+    }
+
     .job-url {
       font-size: 0.75rem;
       color: var(--muted);
@@ -932,6 +952,30 @@
       overflow: hidden;
       text-overflow: ellipsis;
       font-family: 'JetBrains Mono', monospace;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .btn-copy-url {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 5px;
+      padding: 1px 6px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .btn-copy-url:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.3);
     }
 
     .job-actions {
@@ -1089,6 +1133,27 @@
       color: #fff;
     }
 
+    .btn-copy-url-failed {
+      background: rgba(239, 68, 68, 0.14);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      border-radius: 6px;
+      padding: 3px 9px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+      margin-left: auto;
+    }
+
+    .btn-copy-url-failed:hover {
+      background: rgba(239, 68, 68, 0.28);
+      color: #fff;
+    }
+
     .btn-retry-job {
       background: rgba(6, 182, 212, 0.14);
       border: 1px solid rgba(6, 182, 212, 0.35);
@@ -1098,12 +1163,56 @@
       font-size: 0.72rem;
       font-weight: 700;
       cursor: pointer;
-      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
     }
 
     .btn-retry-job:hover {
       background: rgba(6, 182, 212, 0.28);
       color: #fff;
+    }
+
+    .summary-action-btn {
+      background: rgba(239, 68, 68, 0.14);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      border-radius: 99px;
+      padding: 3px 10px;
+      font-size: 0.73rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+
+    .summary-action-btn:hover {
+      background: rgba(239, 68, 68, 0.28);
+      color: #fff;
+    }
+
+    .summary-filter-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 99px;
+      padding: 3px 10px;
+      font-size: 0.73rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+
+    .summary-filter-btn:hover, .summary-filter-btn.active {
+      background: rgba(6, 182, 212, 0.2);
+      border-color: rgba(6, 182, 212, 0.45);
+      color: #67e8f9;
     }
 
     .job-pct {
@@ -1631,7 +1740,10 @@
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <span class="queue-count" id="queueCount">0 items</span>
-        <button class="btn btn-ghost btn-sm" onclick="clearDone()" title="Remove finished, failed, or cancelled downloads">
+        <button class="btn btn-warning btn-sm" id="btnCopyFailedHeader" style="display:none;" onclick="copyAllFailedUrls()" title="Copy all failed download URLs to clipboard">
+          📋 Copy Failed Links
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="clearDone()" title="Remove successfully completed downloads (preserves failed links)">
           🗑 Clear Finished
         </button>
         <button class="btn btn-danger btn-sm" id="btnClearQueueHeader" onclick="clearAllQueue()" title="Force cancel active downloads and purge all items from the queue">
@@ -1924,8 +2036,10 @@
       } else if (msg.type === 'progress') {
         updateProgress(msg.id, msg.progress, msg.title, msg.log, msg.status, msg.stage);
       } else if (msg.type === 'cleared') {
+        const includeFailed = Boolean(msg.includeFailed);
         for (const id in jobData) {
-          if (['done','error','cancelled'].includes(jobData[id].status)) {
+          const s = jobData[id].status;
+          if (s === 'done' || (includeFailed && (s === 'error' || s === 'cancelled'))) {
             delete jobData[id];
             const el = document.getElementById('job-' + id);
             if (el) el.remove();
@@ -2107,6 +2221,11 @@
       }
       const titleEl = document.getElementById('title-' + id);
       if (titleEl) titleEl.textContent = displayTitle;
+      const urlEl = document.getElementById('url-' + id);
+      if (urlEl && j.url) {
+        urlEl.textContent = j.url;
+        urlEl.title = j.url;
+      }
       const logEl = document.getElementById('log-' + id);
       if (logEl && j.log) logEl.textContent = j.log;
     } else {
@@ -2126,7 +2245,10 @@
               <span class="badge-pill ${badgeClass}">${badgeText}</span>
             </div>
             <div class="job-title" id="title-${id}">${escHtml(displayTitle)}</div>
-            <div class="job-url">${escHtml(j.url)}</div>
+            <div class="job-url-row">
+              <div class="job-url" id="url-${id}" title="${escHtml(j.url)}">${escHtml(j.url)}</div>
+              <button class="btn-copy-url" type="button" onclick="copyJobUrl('${id}')" title="Copy URL to clipboard">📋 Copy</button>
+            </div>
           </div>
           <div class="job-actions">
             <button class="job-cancel" id="cancel-${id}" title="${isActive ? 'Cancel Download' : 'Remove from List'}"
@@ -2175,13 +2297,11 @@
     }
 
     if (j.status === 'error') {
-      const retryBtn = isScr
-        ? `<button class="btn-retry-job" type="button" onclick="retryScrapeJob('${id}')">↻ Retry</button>`
-        : '';
       return `
         <div class="job-meta-status">
           <span class="status-badge status-error">✕ Download Failed</span>
-          ${retryBtn}
+          <button class="btn-copy-url-failed" type="button" onclick="copyJobUrl('${id}')" title="Copy failed URL to clipboard">📋 Copy Failed Link</button>
+          <button class="btn-retry-job" type="button" onclick="retryAnyJob('${id}')" title="Retry this download">↻ Retry</button>
         </div>
         ${streamHtml}
         <div class="job-error-box">
@@ -2498,10 +2618,19 @@
     await fetch('/open-folder');
   }
 
+  let filterFailedActive = false;
+
   function updateCount() {
     const all = Object.values(jobData);
     const total = all.length;
     document.getElementById('queueCount').textContent = `${total} item${total !== 1 ? 's' : ''}`;
+
+    const failed = all.filter(j => j.status === 'error');
+    const btnCopyFailed = document.getElementById('btnCopyFailedHeader');
+    if (btnCopyFailed) {
+      btnCopyFailed.style.display = failed.length > 0 ? 'inline-flex' : 'none';
+      btnCopyFailed.textContent = `📋 Copy Failed (${failed.length})`;
+    }
 
     const bar = document.getElementById('queueSummaryBar');
     if (!bar) return;
@@ -2514,42 +2643,138 @@
     const working = all.filter(j => j.status === 'downloading');
     const queued  = all.filter(j => j.status === 'queued');
     const done    = all.filter(j => j.status === 'done');
-    const failed  = all.filter(j => j.status === 'error');
 
     const activeLabel = working.length > 0
       ? (working[0].queueIndex ? `#${working[0].queueIndex}${working[0].queueTotal ? '/' + working[0].queueTotal : ''}` : `${working.length} active`)
       : '0';
+
+    const failedChips = failed.length > 0
+      ? `<span class="summary-chip failed">❌ Failed: <strong>${failed.length}</strong></span>
+         <button class="summary-action-btn" type="button" onclick="copyAllFailedUrls()" title="Copy all failed download URLs to clipboard">📋 Copy All Failed (${failed.length})</button>
+         <button class="summary-filter-btn ${filterFailedActive ? 'active' : ''}" type="button" onclick="toggleFilterFailed()">${filterFailedActive ? '👁️ Show All' : '🔍 Show Failed Only'}</button>`
+      : `<span class="summary-chip failed">❌ Failed: <strong>0</strong></span>`;
 
     bar.classList.add('active');
     bar.innerHTML = `
       <span class="summary-chip working">⚡ Working: <strong>${activeLabel}</strong></span>
       <span class="summary-chip queued">🕐 Queued: <strong>${queued.length}</strong></span>
       <span class="summary-chip done">✅ Done: <strong>${done.length}</strong></span>
-      <span class="summary-chip failed">❌ Failed: <strong>${failed.length}</strong></span>
+      ${failedChips}
     `;
+  }
+
+  function toggleFilterFailed() {
+    filterFailedActive = !filterFailedActive;
+    const allCards = document.querySelectorAll('.job-card');
+    allCards.forEach(card => {
+      const id = card.id.replace('job-', '');
+      const j = jobData[id];
+      if (!j) return;
+      if (filterFailedActive) {
+        card.style.display = (j.status === 'error') ? '' : 'none';
+      } else {
+        card.style.display = '';
+      }
+    });
+    updateCount();
+    toast(filterFailedActive ? '🔍 Showing failed downloads only' : '👁️ Showing all queue items');
+  }
+
+  async function copyJobUrl(id) {
+    const j = jobData[id];
+    if (!j || !j.url) {
+      toast('⚠️ URL not found for this card.');
+      return;
+    }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(j.url);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = j.url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      toast('📋 URL copied to clipboard!');
+    } catch (e) {
+      toast('⚠️ Copy failed: ' + e.message);
+    }
+  }
+
+  async function copyAllFailedUrls() {
+    const failed = Object.values(jobData).filter(j => j.status === 'error' && j.url);
+    if (failed.length === 0) {
+      toast('ℹ️ No failed downloads in queue.');
+      return;
+    }
+    const text = failed.map(j => j.url).join('\n');
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      toast(`📋 Copied ${failed.length} failed link${failed.length > 1 ? 's' : ''} to clipboard!`);
+    } catch (e) {
+      toast('⚠️ Copy failed: ' + e.message);
+    }
   }
 
   async function copyStreamUrl(id) {
     const j = jobData[id];
     if (!j || !j.streamUrl) return;
     try {
-      await navigator.clipboard.writeText(j.streamUrl);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(j.streamUrl);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = j.streamUrl;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
       toast('📋 Copied captured stream download link!');
     } catch (e) {
       toast('⚠️ Copy failed: ' + e.message);
     }
   }
 
-  async function retryScrapeJob(id) {
+  async function retryAnyJob(id) {
     try {
-      const r = await fetch('/scraper/retry/' + encodeURIComponent(id), { method: 'POST' });
+      const r = await fetch('/jobs/retry/' + encodeURIComponent(id), { method: 'POST' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Retry failed');
       if (d.job) handleJob(d.job);
-      toast('↻ Re-queued job for 1-by-1 download!');
+      toast('↻ Re-queued job for download!');
     } catch (e) {
-      toast('❌ ' + e.message);
+      try {
+        const r2 = await fetch('/scraper/retry/' + encodeURIComponent(id), { method: 'POST' });
+        const d2 = await r2.json();
+        if (!r2.ok) throw new Error(d2.error || 'Retry failed');
+        if (d2.job) handleJob(d2.job);
+        toast('↻ Re-queued job for download!');
+      } catch (err2) {
+        toast('❌ ' + (e.message || err2.message));
+      }
     }
+  }
+
+  async function retryScrapeJob(id) {
+    return retryAnyJob(id);
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
