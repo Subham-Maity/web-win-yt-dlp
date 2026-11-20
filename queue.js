@@ -4,10 +4,15 @@ const Redis = require('ioredis');
 const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
 
-const redisConnection = new Redis({
+const redisOptions = {
   host: REDIS_HOST,
   port: REDIS_PORT,
   maxRetriesPerRequest: null,
+  enableReadyCheck: false
+};
+
+const redisConnection = new Redis({
+  ...redisOptions,
   enableReadyCheck: true,
   connectTimeout: 2000,
   commandTimeout: 2000,
@@ -42,9 +47,10 @@ redisConnection.on('error', (err) => {
   }
 });
 
-// Primary download queue for yt-dlp & Instagram downloads
+// Primary download queue for yt-dlp, Lulustream & Instagram downloads
+// Passing redisOptions allows BullMQ to manage dedicated connection pools per Queue and Worker
 const downloadQueue = new Queue('downloadQueue', {
-  connection: redisConnection,
+  connection: redisOptions,
   defaultJobOptions: {
     attempts: 1,
     removeOnComplete: { count: 100 },
@@ -58,7 +64,7 @@ downloadQueue.on('error', () => {
 
 // Sequential 1-by-1 queue for Full Webpage Scraper (resolves fresh stream just-in-time)
 const scrapeQueue = new Queue('scrapeQueue', {
-  connection: redisConnection,
+  connection: redisOptions,
   defaultJobOptions: {
     attempts: 1,
     removeOnComplete: { count: 100 },
@@ -88,6 +94,7 @@ async function isRedisAlive() {
 }
 
 module.exports = {
+  redisOptions,
   redisConnection,
   downloadQueue,
   scrapeQueue,

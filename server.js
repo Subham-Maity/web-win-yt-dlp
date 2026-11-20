@@ -4,9 +4,11 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 const { Worker } = require('bullmq');
 
-const { redisConnection, downloadQueue, scrapeQueue, activeProcesses, isRedisReady, isRedisAlive } = require('./queue');
+const { redisOptions, redisConnection, downloadQueue, scrapeQueue, activeProcesses, isRedisReady, isRedisAlive } = require('./queue');
 const { extractInstagramUsername, downloadInstagramProfile, isInstaloaderAvailable } = require('./instagramService');
 const {
   startInstagramLoginPopup,
@@ -967,7 +969,7 @@ const downloadWorker = new Worker('downloadQueue', async (job) => {
     return await runYtdlpDownload(job);
   }
 }, {
-  connection: redisConnection,
+  connection: redisOptions,
   concurrency: 3
 });
 
@@ -1232,7 +1234,7 @@ function applyScrapeCompletedResult(j, result) {
 const scrapeWorker = new Worker('scrapeQueue', async (job) => {
   return await runScrapeJob(job);
 }, {
-  connection: redisConnection,
+  connection: redisOptions,
   concurrency: 1
 });
 
@@ -1390,6 +1392,14 @@ app.post('/download', async (req, res) => {
             }, { jobId: id }),
             new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
           ]);
+          // Watchdog: If worker doesn't pick up within 3 seconds, start directly
+          setTimeout(() => {
+            const current = jobs.get(id);
+            if (current && current.status === 'queued') {
+              console.warn(`⚠️ Watchdog: IG job ${id} stayed queued >3s, starting direct fallback...`);
+              runDirectIg();
+            }
+          }, 3000);
         } catch (err) {
           console.warn('⚠️ BullMQ add error for IG profile, running direct:', err.message);
           runDirectIg();
@@ -1451,6 +1461,14 @@ app.post('/download', async (req, res) => {
             downloadQueue.add('lulustream', { type: 'lulustream', url }, { jobId: id }),
             new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
           ]);
+          // Watchdog: If worker doesn't pick up within 3 seconds, start directly
+          setTimeout(() => {
+            const current = jobs.get(id);
+            if (current && current.status === 'queued') {
+              console.warn(`⚠️ Watchdog: Lulustream job ${id} stayed queued >3s, starting direct fallback...`);
+              runDirectLulu();
+            }
+          }, 3000);
         } catch (err) {
           console.warn('⚠️ BullMQ add error for Lulustream, running direct:', err.message);
           runDirectLulu();
@@ -1512,6 +1530,14 @@ app.post('/download', async (req, res) => {
           downloadQueue.add('standard', { type: 'standard', url }, { jobId: id }),
           new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
         ]);
+        // Watchdog: If worker doesn't pick up within 3 seconds, start directly
+        setTimeout(() => {
+          const current = jobs.get(id);
+          if (current && current.status === 'queued') {
+            console.warn(`⚠️ Watchdog: Standard job ${id} stayed queued >3s, starting direct fallback...`);
+            runDirectYtdlp();
+          }
+        }, 3000);
       } catch (err) {
         console.warn('⚠️ BullMQ add error, running direct download:', err.message);
         runDirectYtdlp();
@@ -2186,6 +2212,13 @@ app.post(['/jobs/retry/:id', '/scraper/retry/:id'], async (req, res) => {
           downloadQueue.add('lulustream', { type: 'lulustream', url: old.url }, { jobId: id }),
           new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
         ]);
+        setTimeout(() => {
+          const current = jobs.get(id);
+          if (current && current.status === 'queued') {
+            console.warn(`⚠️ Watchdog: Retry Lulustream job ${id} stayed queued >3s, starting direct fallback...`);
+            runDirectLulu();
+          }
+        }, 3000);
       } catch (err) {
         console.warn('⚠️ BullMQ add error on retry for Lulustream:', err.message);
         runDirectLulu();
@@ -2247,6 +2280,13 @@ app.post(['/jobs/retry/:id', '/scraper/retry/:id'], async (req, res) => {
         downloadQueue.add('standard', { type: 'standard', url: old.url }, { jobId: id }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
       ]);
+      setTimeout(() => {
+        const current = jobs.get(id);
+        if (current && current.status === 'queued') {
+          console.warn(`⚠️ Watchdog: Retry standard job ${id} stayed queued >3s, starting direct fallback...`);
+          runDirectStandard();
+        }
+      }, 3000);
     } catch (err) {
       console.warn('⚠️ BullMQ add error on retry, running direct:', err.message);
       runDirectStandard();
