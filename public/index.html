@@ -928,6 +928,12 @@
       border: 1px solid rgba(6, 182, 212, 0.35);
     }
 
+    .badge-lulu-pill {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, 0.35);
+    }
+
     .job-title {
       font-size: 0.95rem;
       font-weight: 600;
@@ -2191,8 +2197,9 @@
     const existing = document.getElementById('job-' + id);
     const isIg = j.type === 'instagram_profile';
     const isScr = j.type === 'web_scrape';
-    const typeClass = isIg ? 'ig-job ' : isScr ? 'scr-job ' : '';
-    const activeIcon = isIg ? '📸' : isScr ? '🌐' : '⬇️';
+    const isLulu = j.type === 'lulustream';
+    const typeClass = isIg ? 'ig-job ' : isScr ? 'scr-job ' : isLulu ? 'lulu-job ' : '';
+    const activeIcon = isIg ? '📸' : isScr ? '🌐' : isLulu ? '⚡' : '⬇️';
 
     const icons = { done: '✅', error: '❌', cancelled: '⛔', downloading: activeIcon, queued: '🕐' };
     const icon = icons[j.status] || activeIcon;
@@ -2206,8 +2213,8 @@
       existing.className = `job-card ${typeClass}${j.status}`;
       const badgesEl = existing.querySelector('.job-badges');
       if (badgesEl) {
-        const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : 'badge-std-pill';
-        const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : 'Video Download');
+        const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : isLulu ? 'badge-lulu-pill' : 'badge-std-pill';
+        const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : isLulu ? 'Lulustream Video' : 'Video Download');
         badgesEl.innerHTML = `${indexPillHtml}<span class="badge-pill ${badgeClass}">${badgeText}</span>`;
       }
       const statusArea = existing.querySelector('.job-status-area');
@@ -2233,8 +2240,8 @@
       card.className = `job-card ${typeClass}${j.status}`;
       card.id = 'job-' + id;
 
-      const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : 'badge-std-pill';
-      const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : 'Video Download');
+      const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : isLulu ? 'badge-lulu-pill' : 'badge-std-pill';
+      const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : isLulu ? 'Lulustream Video' : 'Video Download');
 
       card.innerHTML = `
         <div class="job-top">

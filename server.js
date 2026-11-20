@@ -685,6 +685,238 @@ function runYtdlpDownload(job) {
   });
 }
 
+// ── Lulustream Native Video Extractor & Downloader ───────────────────────────
+const LULUSTREAM_DOMAINS_RE = /^https?:\/\/(?:www\.)?(?:lplaygo\.com|lulustream\.com|luluvdo\.com|ponstream\.com|vidlulu\.com|luluvid\.(?:com|net)|bembed\.net|playlulu\.com)\/(?:[a-z]\/)?([a-zA-Z0-9]+)/i;
+
+function isLulustreamUrl(url) {
+  return typeof url === 'string' && LULUSTREAM_DOMAINS_RE.test(url.trim());
+}
+
+function unpackDeanEdwards(scriptText) {
+  const m = scriptText.match(/return\s+p\s*}\s*\(\s*['"]([\s\S]*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([\s\S]*?)['"]\.split\(['"]\|['"]\)/);
+  if (!m) return null;
+  const p = m[1], a = parseInt(m[2]), c = parseInt(m[3]), k = m[4].split('|');
+  function e(c) {
+    return (c < a ? '' : e(parseInt(c / a))) + ((c = c % a) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
+  }
+  let str = p;
+  let count = c;
+  while (count--) {
+    if (k[count]) {
+      str = str.replace(new RegExp('\\b' + e(count) + '\\b', 'g'), k[count]);
+    }
+  }
+  return str;
+}
+
+async function extractLulustreamMedia(pageUrl) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(pageUrl);
+    const client = u.protocol === 'https:' ? https : http;
+    const req = client.get(pageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': pageUrl,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return extractLulustreamMedia(new URL(res.headers.location, pageUrl).href).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`Failed to load page (HTTP ${res.statusCode})`));
+      }
+      let html = '';
+      res.on('data', chunk => html += chunk);
+      res.on('end', () => {
+        let title = '';
+        const docTitleMatch = html.match(/document\.title\s*=\s*["']([^"']+)["']/i);
+        if (docTitleMatch) {
+          title = docTitleMatch[1].replace(/\\u002d/g, '-').replace(/\s*-\s*Lulustream\.mp4$/i, '').trim();
+        }
+        if (!title) {
+          const tagTitle = html.match(/<title>([^<]+)<\/title>/i);
+          if (tagTitle) {
+            title = tagTitle[1].replace(/\s*-\s*Lulustream\.mp4$/i, '').trim();
+          }
+        }
+        const idMatch = pageUrl.match(LULUSTREAM_DOMAINS_RE);
+        const mediaId = idMatch ? idMatch[1] : 'video';
+        if (!title) {
+          title = `Lulustream_${mediaId}`;
+        }
+
+        const packedMatch = html.match(/eval\(function\(p,a,c,k,e,d\)[\s\S]+?\.split\('\|'\)\)\)/);
+        if (!packedMatch) {
+          return reject(new Error('Could not find player packed script on page'));
+        }
+
+        const unpacked = unpackDeanEdwards(packedMatch[0]);
+        if (!unpacked) {
+          return reject(new Error('Failed to unpack player JavaScript'));
+        }
+
+        const m3u8Match = unpacked.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/i);
+        if (!m3u8Match) {
+          const srcMatch = unpacked.match(/(?:file|sources)\s*:\s*\[?\{?\s*["']?(?:file|src)?["']?\s*:\s*["']([^"']+)["']/i);
+          if (srcMatch && srcMatch[1]) {
+            return resolve({
+              mediaId,
+              title,
+              mediaUrl: srcMatch[1],
+              durationSec: 0,
+              pageUrl
+            });
+          }
+          return reject(new Error('Could not find stream URL in unpacked player script'));
+        }
+
+        const durMatch = unpacked.match(/duration\s*:\s*["']?([\d.]+)["']?/i);
+        const durationSec = durMatch ? parseFloat(durMatch[1]) : 0;
+
+        resolve({
+          mediaId,
+          title,
+          mediaUrl: m3u8Match[0],
+          durationSec,
+          pageUrl
+        });
+      });
+    });
+    req.on('error', reject);
+  });
+}
+
+async function resolveLulustreamVariant(masterUrl, origin) {
+  return new Promise((resolve) => {
+    https.get(masterUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': origin
+      }
+    }, (res) => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => {
+        const lines = body.split('\n');
+        const variant = lines.find(l => l && l.trim().startsWith('http'));
+        resolve(variant ? variant.trim() : masterUrl);
+      });
+    }).on('error', () => resolve(masterUrl));
+  });
+}
+
+async function runLulustreamDownload(job) {
+  const { url, abortSignal = null } = job.data;
+  const id = job.id;
+
+  const j = jobs.get(id);
+  if (j) {
+    j.status = 'downloading';
+    j.log = 'Connecting to host and extracting stream...';
+    broadcast({ type: 'job', ...j });
+  }
+
+  const details = await extractLulustreamMedia(url);
+  const mediaId = details.mediaId;
+  const safeTitle = sanitizeFileName(details.title.replace(/\.mp4$/i, '')) || `Lulustream_${mediaId}`;
+  const outFileName = `${safeTitle} [${mediaId}].mp4`;
+  const outFilePath = path.join(DOWNLOAD_DIR, outFileName);
+
+  if (j) {
+    j.title = details.title;
+    j.log = 'Resolving media stream playlist...';
+    broadcast({ type: 'job', ...j });
+  }
+
+  const origin = new URL(url).origin + '/';
+  let streamUrl = details.mediaUrl;
+  try {
+    streamUrl = await resolveLulustreamVariant(details.mediaUrl, origin);
+  } catch (_) {}
+
+  return new Promise((resolve, reject) => {
+    const ffmpegArgs = [
+      '-headers', `Referer: ${origin}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n`,
+      '-i', streamUrl,
+      '-c', 'copy',
+      '-bsf:a', 'aac_adtstoasc',
+      '-progress', 'pipe:1',
+      '-nostats',
+      '-y',
+      outFilePath
+    ];
+
+    const proc = spawn('ffmpeg', ffmpegArgs);
+    activeProcesses.set(id, proc);
+
+    let progress = 0;
+    let stdoutBuf = '';
+
+    proc.stdout.on('data', (d) => {
+      stdoutBuf += d.toString();
+      const lines = stdoutBuf.split('\n');
+      stdoutBuf = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('out_time_us=')) {
+          const us = parseInt(trimmed.split('=')[1], 10);
+          if (!isNaN(us) && details.durationSec > 0) {
+            const curSec = us / 1000000;
+            progress = Math.min(Math.round((curSec / details.durationSec) * 100), 99);
+            const item = jobs.get(id);
+            const logMsg = `Downloading HLS stream: ${curSec.toFixed(0)}s / ${details.durationSec.toFixed(0)}s (${progress}%)`;
+            if (item) {
+              item.progress = progress;
+              item.log = logMsg;
+            }
+            broadcast({
+              type: 'progress',
+              id,
+              status: 'downloading',
+              stage: 'downloading',
+              progress,
+              title: details.title,
+              log: logMsg
+            });
+          }
+        } else if (trimmed === 'progress=end') {
+          progress = 100;
+        }
+      }
+    });
+
+    let stderrBuf = '';
+    proc.stderr.on('data', (d) => {
+      stderrBuf += d.toString();
+      if (stderrBuf.length > 8000) stderrBuf = stderrBuf.slice(-4000);
+    });
+
+    if (abortSignal) {
+      abortSignal.addEventListener('abort', () => {
+        try { proc.kill('SIGKILL'); } catch (_) {}
+        reject(new Error('Cancelled by user'));
+      }, { once: true });
+    }
+
+    proc.on('close', (code) => {
+      activeProcesses.delete(id);
+      if (code === 0 || (fs.existsSync(outFilePath) && fs.statSync(outFilePath).size > 102400)) {
+        resolve({ title: details.title, progress: 100 });
+      } else {
+        const cleanErr = stderrBuf.trim().split('\n').pop() || `ffmpeg exited with code ${code}`;
+        reject(new Error(`Download failed: ${cleanErr}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      activeProcesses.delete(id);
+      reject(err);
+    });
+  });
+}
+
 // ── BullMQ Worker Setup ──────────────────────────────────────────────────────
 const downloadWorker = new Worker('downloadQueue', async (job) => {
   const j = jobs.get(job.id);
@@ -727,6 +959,9 @@ const downloadWorker = new Worker('downloadQueue', async (job) => {
       }
     });
     return res;
+  } else if (job.data.type === 'lulustream' || isLulustreamUrl(job.data.url)) {
+    // ⚡ Lulustream Native Video Downloader Job
+    return await runLulustreamDownload(job);
   } else {
     // ⬇️ Standard URL Downloader Job
     return await runYtdlpDownload(job);
@@ -1161,6 +1396,71 @@ app.post('/download', async (req, res) => {
         }
       } else {
         runDirectIg();
+      }
+      continue;
+    }
+
+    // Auto-detect Lulustream / Lplaygo links pasted in standard downloader
+    if (isLulustreamUrl(url)) {
+      const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const jobData = {
+        id,
+        type: 'lulustream',
+        url,
+        status: 'downloading',
+        progress: 0,
+        title: url,
+        log: 'Connecting to host and extracting stream...',
+        error: '',
+        badge: 'Lulustream Video'
+      };
+
+      const runDirectLulu = () => {
+        jobData.status = 'downloading';
+        jobData.log = 'Connecting to host and extracting stream...';
+        broadcast({ type: 'job', ...jobData });
+        runLulustreamDownload({ id, data: { url } })
+          .then((result) => {
+            jobData.status = 'done';
+            jobData.progress = 100;
+            jobData.title = result.title || jobData.title;
+            jobData.log = 'Download complete. File saved to Downloads/yt-dlp/';
+            broadcast({ type: 'job', ...jobData });
+            scheduleSaveQueueState();
+          })
+          .catch((e) => {
+            jobData.status = 'error';
+            jobData.error = e.message;
+            jobData.log = 'Failed: ' + e.message;
+            broadcast({ type: 'job', ...jobData });
+            scheduleSaveQueueState();
+          });
+      };
+
+      const redisOk = await isRedisAlive();
+      if (redisOk) {
+        jobData.status = 'queued';
+        jobData.log = 'Queued in BullMQ worker...';
+        jobs.set(id, jobData);
+        started.push(id);
+        createdJobs.push(jobData);
+        broadcast({ type: 'job', ...jobData });
+
+        try {
+          await Promise.race([
+            downloadQueue.add('lulustream', { type: 'lulustream', url }, { jobId: id }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+          ]);
+        } catch (err) {
+          console.warn('⚠️ BullMQ add error for Lulustream, running direct:', err.message);
+          runDirectLulu();
+        }
+      } else {
+        jobs.set(id, jobData);
+        started.push(id);
+        createdJobs.push(jobData);
+        broadcast({ type: 'job', ...jobData });
+        runDirectLulu();
       }
       continue;
     }
@@ -1834,6 +2134,67 @@ app.post(['/jobs/retry/:id', '/scraper/retry/:id'], async (req, res) => {
       } catch (err) {
         console.warn('⚠️ BullMQ add error on retry for IG profile:', err.message);
       }
+    }
+    return res.json({ ok: true, job: jobData });
+  }
+
+  if (old.type === 'lulustream' || isLulustreamUrl(old.url)) {
+    const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const jobData = {
+      id,
+      type: 'lulustream',
+      url: old.url,
+      status: redisOk ? 'queued' : 'downloading',
+      progress: 0,
+      title: old.title || old.url,
+      log: redisOk ? 'Queued in BullMQ worker...' : 'Connecting to host and extracting stream...',
+      error: '',
+      badge: 'Lulustream Video'
+    };
+
+    const runDirectLulu = () => {
+      jobData.status = 'downloading';
+      jobData.log = 'Connecting to host and extracting stream...';
+      broadcast({ type: 'job', ...jobData });
+      runLulustreamDownload({ id, data: { url: old.url } })
+        .then((result) => {
+          jobData.status = 'done';
+          jobData.progress = 100;
+          jobData.title = result.title || jobData.title;
+          jobData.log = 'Download complete. File saved to Downloads/yt-dlp/';
+          broadcast({ type: 'job', ...jobData });
+          scheduleSaveQueueState();
+        })
+        .catch((e) => {
+          jobData.status = 'error';
+          jobData.error = e.message;
+          jobData.log = 'Failed: ' + e.message;
+          broadcast({ type: 'job', ...jobData });
+          scheduleSaveQueueState();
+        });
+    };
+
+    if (redisOk) {
+      jobData.status = 'queued';
+      jobData.log = 'Queued in BullMQ worker...';
+      jobs.set(id, jobData);
+      broadcast({ type: 'job', ...jobData });
+      scheduleSaveQueueState();
+
+      try {
+        await Promise.race([
+          downloadQueue.add('lulustream', { type: 'lulustream', url: old.url }, { jobId: id }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+        ]);
+      } catch (err) {
+        console.warn('⚠️ BullMQ add error on retry for Lulustream:', err.message);
+        runDirectLulu();
+      }
+    } else {
+      jobs.set(id, jobData);
+      broadcast({ type: 'job', ...jobData });
+      scheduleSaveQueueState();
+      runDirectLulu();
     }
     return res.json({ ok: true, job: jobData });
   }
