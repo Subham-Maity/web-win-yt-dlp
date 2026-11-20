@@ -11,6 +11,11 @@ subham_xam/
 downloads/
 queue-state.json
 scrape-archive.json
+failed_links*.txt
+
+# Scratch scripts & temporary tests
+scratch/
+test_*.js
 
 # Logs
 npm-debug.log*
