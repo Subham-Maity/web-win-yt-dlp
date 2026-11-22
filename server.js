@@ -866,11 +866,17 @@ async function runLulustreamDownload(job) {
         const trimmed = line.trim();
         if (trimmed.startsWith('out_time_us=')) {
           const us = parseInt(trimmed.split('=')[1], 10);
-          if (!isNaN(us) && details.durationSec > 0) {
+          if (!isNaN(us)) {
             const curSec = us / 1000000;
-            progress = Math.min(Math.round((curSec / details.durationSec) * 100), 99);
+            if (details.durationSec > 0) {
+              progress = Math.min(Math.round((curSec / details.durationSec) * 100), 99);
+            } else {
+              progress = Math.min(Math.round(curSec / 10), 95);
+            }
             const item = jobs.get(id);
-            const logMsg = `Downloading HLS stream: ${curSec.toFixed(0)}s / ${details.durationSec.toFixed(0)}s (${progress}%)`;
+            const logMsg = details.durationSec > 0
+              ? `Downloading HLS stream: ${curSec.toFixed(0)}s / ${details.durationSec.toFixed(0)}s (${progress}%)`
+              : `Downloading HLS stream: ${curSec.toFixed(0)}s downloaded...`;
             if (item) {
               item.progress = progress;
               item.log = logMsg;
@@ -893,8 +899,16 @@ async function runLulustreamDownload(job) {
 
     let stderrBuf = '';
     proc.stderr.on('data', (d) => {
-      stderrBuf += d.toString();
+      const s = d.toString();
+      stderrBuf += s;
       if (stderrBuf.length > 8000) stderrBuf = stderrBuf.slice(-4000);
+
+      if (!details.durationSec || details.durationSec <= 0) {
+        const durMatch = stderrBuf.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)/i);
+        if (durMatch) {
+          details.durationSec = parseInt(durMatch[1], 10) * 3600 + parseInt(durMatch[2], 10) * 60 + parseFloat(durMatch[3]);
+        }
+      }
     });
 
     if (abortSignal) {
@@ -1020,7 +1034,7 @@ async function extractVidaraMedia(pageUrl) {
   let masterStreamUrl = streamData.streaming_url;
   try {
     const plRes = await fetchTextWithRedirects(masterStreamUrl, { 'User-Agent': ua, 'Referer': embedUrl });
-    const variantLine = plRes.body.split('\n').find(l => l && l.trim().endsWith('.m3u8'));
+    const variantLine = plRes.body.split('\n').find(l => l && l.trim().includes('.m3u8'));
     let subUrl = masterStreamUrl;
     if (variantLine) {
       subUrl = new URL(variantLine.trim(), masterStreamUrl).href;
@@ -1094,11 +1108,17 @@ async function runVidaraDownload(job) {
         const trimmed = line.trim();
         if (trimmed.startsWith('out_time_us=')) {
           const us = parseInt(trimmed.split('=')[1], 10);
-          if (!isNaN(us) && details.durationSec > 0) {
+          if (!isNaN(us)) {
             const curSec = us / 1000000;
-            progress = Math.min(Math.round((curSec / details.durationSec) * 100), 99);
+            if (details.durationSec > 0) {
+              progress = Math.min(Math.round((curSec / details.durationSec) * 100), 99);
+            } else {
+              progress = Math.min(Math.round(curSec / 10), 95);
+            }
             const item = jobs.get(id);
-            const logMsg = `Downloading HLS stream: ${curSec.toFixed(0)}s / ${details.durationSec.toFixed(0)}s (${progress}%)`;
+            const logMsg = details.durationSec > 0
+              ? `Downloading HLS stream: ${curSec.toFixed(0)}s / ${details.durationSec.toFixed(0)}s (${progress}%)`
+              : `Downloading HLS stream: ${curSec.toFixed(0)}s downloaded...`;
             if (item) {
               item.progress = progress;
               item.log = logMsg;
@@ -1121,8 +1141,16 @@ async function runVidaraDownload(job) {
 
     let stderrBuf = '';
     proc.stderr.on('data', (d) => {
-      stderrBuf += d.toString();
+      const s = d.toString();
+      stderrBuf += s;
       if (stderrBuf.length > 8000) stderrBuf = stderrBuf.slice(-4000);
+
+      if (!details.durationSec || details.durationSec <= 0) {
+        const durMatch = stderrBuf.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)/i);
+        if (durMatch) {
+          details.durationSec = parseInt(durMatch[1], 10) * 3600 + parseInt(durMatch[2], 10) * 60 + parseFloat(durMatch[3]);
+        }
+      }
     });
 
     if (abortSignal) {
