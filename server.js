@@ -913,7 +913,10 @@ async function runLulustreamDownload(job) {
 
     if (abortSignal) {
       abortSignal.addEventListener('abort', () => {
-        try { proc.kill('SIGKILL'); } catch (_) {}
+        try {
+          if (proc.pid) spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
+          proc.kill('SIGKILL');
+        } catch (_) {}
         reject(new Error('Cancelled by user'));
       }, { once: true });
     }
@@ -1155,7 +1158,10 @@ async function runVidaraDownload(job) {
 
     if (abortSignal) {
       abortSignal.addEventListener('abort', () => {
-        try { proc.kill('SIGKILL'); } catch (_) {}
+        try {
+          if (proc.pid) spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t'], { windowsHide: true });
+          proc.kill('SIGKILL');
+        } catch (_) {}
         reject(new Error('Cancelled by user'));
       }, { once: true });
     }
