@@ -934,6 +934,12 @@
       border: 1px solid rgba(168, 85, 247, 0.35);
     }
 
+    .badge-vidara-pill {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+
     .job-title {
       font-size: 0.95rem;
       font-weight: 600;
@@ -2198,8 +2204,9 @@
     const isIg = j.type === 'instagram_profile';
     const isScr = j.type === 'web_scrape';
     const isLulu = j.type === 'lulustream';
-    const typeClass = isIg ? 'ig-job ' : isScr ? 'scr-job ' : isLulu ? 'lulu-job ' : '';
-    const activeIcon = isIg ? '📸' : isScr ? '🌐' : isLulu ? '⚡' : '⬇️';
+    const isVidara = j.type === 'vidara';
+    const typeClass = isIg ? 'ig-job ' : isScr ? 'scr-job ' : isLulu ? 'lulu-job ' : isVidara ? 'vidara-job ' : '';
+    const activeIcon = isIg ? '📸' : isScr ? '🌐' : isLulu ? '⚡' : isVidara ? '🎬' : '⬇️';
 
     const icons = { done: '✅', error: '❌', cancelled: '⛔', downloading: activeIcon, queued: '🕐' };
     const icon = icons[j.status] || activeIcon;
@@ -2213,8 +2220,8 @@
       existing.className = `job-card ${typeClass}${j.status}`;
       const badgesEl = existing.querySelector('.job-badges');
       if (badgesEl) {
-        const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : isLulu ? 'badge-lulu-pill' : 'badge-std-pill';
-        const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : isLulu ? 'Lulustream Video' : 'Video Download');
+        const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : isLulu ? 'badge-lulu-pill' : isVidara ? 'badge-vidara-pill' : 'badge-std-pill';
+        const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : isLulu ? 'Lulustream Video' : isVidara ? 'Vidara Video' : 'Video Download');
         badgesEl.innerHTML = `${indexPillHtml}<span class="badge-pill ${badgeClass}">${badgeText}</span>`;
       }
       const statusArea = existing.querySelector('.job-status-area');
@@ -2240,8 +2247,8 @@
       card.className = `job-card ${typeClass}${j.status}`;
       card.id = 'job-' + id;
 
-      const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : isLulu ? 'badge-lulu-pill' : 'badge-std-pill';
-      const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : isLulu ? 'Lulustream Video' : 'Video Download');
+      const badgeClass = isIg ? 'badge-ig-pill' : isScr ? 'badge-scr-pill' : isLulu ? 'badge-lulu-pill' : isVidara ? 'badge-vidara-pill' : 'badge-std-pill';
+      const badgeText  = j.badge || (isIg ? 'Instagram Profile Download' : isScr ? 'Webpage Scraper (1-by-1)' : isLulu ? 'Lulustream Video' : isVidara ? 'Vidara Video' : 'Video Download');
 
       card.innerHTML = `
         <div class="job-top">

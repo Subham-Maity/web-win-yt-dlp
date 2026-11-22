@@ -840,7 +840,237 @@ async function runLulustreamDownload(job) {
   return new Promise((resolve, reject) => {
     const ffmpegArgs = [
       '-headers', `Referer: ${origin}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n`,
+      '-allowed_segment_extensions', 'ALL',
+      '-extension_picky', '0',
       '-i', streamUrl,
+      '-c', 'copy',
+      '-bsf:a', 'aac_adtstoasc',
+      '-progress', 'pipe:1',
+      '-nostats',
+      '-y',
+      outFilePath
+    ];
+
+    const proc = spawn('ffmpeg', ffmpegArgs);
+    activeProcesses.set(id, proc);
+
+    let progress = 0;
+    let stdoutBuf = '';
+
+    proc.stdout.on('data', (d) => {
+      stdoutBuf += d.toString();
+      const lines = stdoutBuf.split('\n');
+      stdoutBuf = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('out_time_us=')) {
+          const us = parseInt(trimmed.split('=')[1], 10);
+          if (!isNaN(us) && details.durationSec > 0) {
+            const curSec = us / 1000000;
+            progress = Math.min(Math.round((curSec / details.durationSec) * 100), 99);
+            const item = jobs.get(id);
+            const logMsg = `Downloading HLS stream: ${curSec.toFixed(0)}s / ${details.durationSec.toFixed(0)}s (${progress}%)`;
+            if (item) {
+              item.progress = progress;
+              item.log = logMsg;
+            }
+            broadcast({
+              type: 'progress',
+              id,
+              status: 'downloading',
+              stage: 'downloading',
+              progress,
+              title: details.title,
+              log: logMsg
+            });
+          }
+        } else if (trimmed === 'progress=end') {
+          progress = 100;
+        }
+      }
+    });
+
+    let stderrBuf = '';
+    proc.stderr.on('data', (d) => {
+      stderrBuf += d.toString();
+      if (stderrBuf.length > 8000) stderrBuf = stderrBuf.slice(-4000);
+    });
+
+    if (abortSignal) {
+      abortSignal.addEventListener('abort', () => {
+        try { proc.kill('SIGKILL'); } catch (_) {}
+        reject(new Error('Cancelled by user'));
+      }, { once: true });
+    }
+
+    proc.on('close', (code) => {
+      activeProcesses.delete(id);
+      if (code === 0 || (fs.existsSync(outFilePath) && fs.statSync(outFilePath).size > 102400)) {
+        resolve({ title: details.title, progress: 100 });
+      } else {
+        const cleanErr = stderrBuf.trim().split('\n').pop() || `ffmpeg exited with code ${code}`;
+        reject(new Error(`Download failed: ${cleanErr}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      activeProcesses.delete(id);
+      reject(err);
+    });
+  });
+}
+
+// ── Vidara Native Video Extractor & Downloader ──────────────────────────────
+const VIDARA_DOMAINS_RE = /^https?:\/\/(?:www\.)?(?:vidara\.to|fhjabs\.com)\/(?:v|e|embed)\/([a-zA-Z0-9]+)/i;
+
+function isVidaraUrl(url) {
+  return typeof url === 'string' && VIDARA_DOMAINS_RE.test(url.trim());
+}
+
+function fetchTextWithRedirects(urlStr, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const client = u.protocol === 'https:' ? https : http;
+    client.get(u, { headers }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchTextWithRedirects(new URL(res.headers.location, urlStr).href, headers).then(resolve, reject);
+      }
+      let b = '';
+      res.on('data', c => b += c);
+      res.on('end', () => resolve({ body: b, status: res.statusCode, headers: res.headers }));
+    }).on('error', reject);
+  });
+}
+
+function postJsonData(urlStr, data, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const body = JSON.stringify(data);
+    const client = u.protocol === 'https:' ? https : http;
+    const req = client.request(u, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        ...headers
+      }
+    }, (res) => {
+      let b = '';
+      res.on('data', c => b += c);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(b));
+        } catch (e) {
+          reject(new Error(`Invalid JSON from ${urlStr}: ${b.slice(0, 200)}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function extractVidaraMedia(pageUrl) {
+  const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  const pageRes = await fetchTextWithRedirects(pageUrl, {
+    'User-Agent': ua,
+    'Referer': pageUrl,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+  });
+
+  if (pageRes.status !== 200) {
+    throw new Error(`Failed to load page (HTTP ${pageRes.status})`);
+  }
+
+  let title = '';
+  const titleM = pageRes.body.match(/<h1[^>]*>([^<]+)<\/h1>/i) || pageRes.body.match(/<title>([^<]+)<\/title>/i);
+  if (titleM) {
+    title = titleM[1].replace(/^Watch\s+/i, '').replace(/\s*-\s*Vidara$/i, '').trim();
+  }
+
+  const iframeM = pageRes.body.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+  const embedUrl = iframeM ? (iframeM[1].startsWith('//') ? 'https:' + iframeM[1] : iframeM[1]) : pageUrl;
+
+  const filecodeM = embedUrl.match(/\/(?:v|e|embed)\/([a-zA-Z0-9]+)/i) || pageUrl.match(/\/(?:v|e|embed)\/([a-zA-Z0-9]+)/i);
+  const mediaId = filecodeM ? filecodeM[1] : 'video';
+  if (!title) title = `Vidara_${mediaId}`;
+
+  const embedOrigin = new URL(embedUrl).origin;
+  const streamData = await postJsonData(`${embedOrigin}/api/stream`, {
+    filecode: mediaId,
+    device: 'web',
+    codecs: []
+  }, {
+    'Referer': embedUrl,
+    'Origin': embedOrigin,
+    'User-Agent': ua
+  });
+
+  if (!streamData || !streamData.streaming_url) {
+    throw new Error('Failed to resolve video stream from Vidara API');
+  }
+
+  if (streamData.title && !title) {
+    title = streamData.title;
+  }
+
+  let durationSec = 0;
+  let masterStreamUrl = streamData.streaming_url;
+  try {
+    const plRes = await fetchTextWithRedirects(masterStreamUrl, { 'User-Agent': ua, 'Referer': embedUrl });
+    const variantLine = plRes.body.split('\n').find(l => l && l.trim().endsWith('.m3u8'));
+    let subUrl = masterStreamUrl;
+    if (variantLine) {
+      subUrl = new URL(variantLine.trim(), masterStreamUrl).href;
+    }
+    const subRes = await fetchTextWithRedirects(subUrl, { 'User-Agent': ua, 'Referer': embedUrl });
+    const durMatches = subRes.body.matchAll(/#EXTINF:([\d.]+)/g);
+    for (const dm of durMatches) {
+      durationSec += parseFloat(dm[1]);
+    }
+  } catch (_) {}
+
+  return {
+    mediaId,
+    title,
+    streamUrl: masterStreamUrl,
+    embedOrigin: embedOrigin + '/',
+    durationSec,
+    pageUrl
+  };
+}
+
+async function runVidaraDownload(job) {
+  const { url, abortSignal = null } = job.data;
+  const id = job.id;
+
+  const j = jobs.get(id);
+  if (j) {
+    j.status = 'downloading';
+    j.log = 'Connecting to Vidara host and resolving stream...';
+    broadcast({ type: 'job', ...j });
+  }
+
+  const details = await extractVidaraMedia(url);
+  const mediaId = details.mediaId;
+  const safeTitle = sanitizeFileName(details.title.replace(/\.mp4$/i, '')) || `Vidara_${mediaId}`;
+  const outFileName = `${safeTitle} [${mediaId}].mp4`;
+  const outFilePath = path.join(DOWNLOAD_DIR, outFileName);
+
+  if (j) {
+    j.title = details.title;
+    j.log = 'Starting stream download...';
+    broadcast({ type: 'job', ...j });
+  }
+
+  return new Promise((resolve, reject) => {
+    const ffmpegArgs = [
+      '-headers', `Referer: ${details.embedOrigin}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n`,
+      '-allowed_segment_extensions', 'ALL',
+      '-extension_picky', '0',
+      '-i', details.streamUrl,
       '-c', 'copy',
       '-bsf:a', 'aac_adtstoasc',
       '-progress', 'pipe:1',
@@ -964,6 +1194,9 @@ const downloadWorker = new Worker('downloadQueue', async (job) => {
   } else if (job.data.type === 'lulustream' || isLulustreamUrl(job.data.url)) {
     // ⚡ Lulustream Native Video Downloader Job
     return await runLulustreamDownload(job);
+  } else if (job.data.type === 'vidara' || isVidaraUrl(job.data.url)) {
+    // 🎬 Vidara Native Video Downloader Job
+    return await runVidaraDownload(job);
   } else {
     // ⬇️ Standard URL Downloader Job
     return await runYtdlpDownload(job);
@@ -1479,6 +1712,79 @@ app.post('/download', async (req, res) => {
         createdJobs.push(jobData);
         broadcast({ type: 'job', ...jobData });
         runDirectLulu();
+      }
+      continue;
+    }
+
+    // Auto-detect Vidara / Fhjabs links pasted in standard downloader
+    if (isVidaraUrl(url)) {
+      const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const jobData = {
+        id,
+        type: 'vidara',
+        url,
+        status: 'downloading',
+        progress: 0,
+        title: url,
+        log: 'Connecting to Vidara host and resolving stream...',
+        error: '',
+        badge: 'Vidara Video'
+      };
+
+      const runDirectVidara = () => {
+        jobData.status = 'downloading';
+        jobData.log = 'Connecting to Vidara host and resolving stream...';
+        broadcast({ type: 'job', ...jobData });
+        runVidaraDownload({ id, data: { url } })
+          .then((result) => {
+            jobData.status = 'done';
+            jobData.progress = 100;
+            jobData.title = result.title || jobData.title;
+            jobData.log = 'Download complete. File saved to Downloads/yt-dlp/';
+            broadcast({ type: 'job', ...jobData });
+            scheduleSaveQueueState();
+          })
+          .catch((e) => {
+            jobData.status = 'error';
+            jobData.error = e.message;
+            jobData.log = 'Failed: ' + e.message;
+            broadcast({ type: 'job', ...jobData });
+            scheduleSaveQueueState();
+          });
+      };
+
+      const redisOk = await isRedisAlive();
+      if (redisOk) {
+        jobData.status = 'queued';
+        jobData.log = 'Queued in BullMQ worker...';
+        jobs.set(id, jobData);
+        started.push(id);
+        createdJobs.push(jobData);
+        broadcast({ type: 'job', ...jobData });
+
+        try {
+          await Promise.race([
+            downloadQueue.add('vidara', { type: 'vidara', url }, { jobId: id }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+          ]);
+          // Watchdog: If worker doesn't pick up within 3 seconds, start directly
+          setTimeout(() => {
+            const current = jobs.get(id);
+            if (current && current.status === 'queued') {
+              console.warn(`⚠️ Watchdog: Vidara job ${id} stayed queued >3s, starting direct fallback...`);
+              runDirectVidara();
+            }
+          }, 3000);
+        } catch (err) {
+          console.warn('⚠️ BullMQ add error for Vidara, running direct:', err.message);
+          runDirectVidara();
+        }
+      } else {
+        jobs.set(id, jobData);
+        started.push(id);
+        createdJobs.push(jobData);
+        broadcast({ type: 'job', ...jobData });
+        runDirectVidara();
       }
       continue;
     }
@@ -2228,6 +2534,74 @@ app.post(['/jobs/retry/:id', '/scraper/retry/:id'], async (req, res) => {
       broadcast({ type: 'job', ...jobData });
       scheduleSaveQueueState();
       runDirectLulu();
+    }
+    return res.json({ ok: true, job: jobData });
+  }
+
+  if (old.type === 'vidara' || isVidaraUrl(old.url)) {
+    const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const jobData = {
+      id,
+      type: 'vidara',
+      url: old.url,
+      status: redisOk ? 'queued' : 'downloading',
+      progress: 0,
+      title: old.title || old.url,
+      log: redisOk ? 'Queued in BullMQ worker...' : 'Connecting to Vidara host and resolving stream...',
+      error: '',
+      badge: 'Vidara Video'
+    };
+
+    const runDirectVidara = () => {
+      jobData.status = 'downloading';
+      jobData.log = 'Connecting to Vidara host and resolving stream...';
+      broadcast({ type: 'job', ...jobData });
+      runVidaraDownload({ id, data: { url: old.url } })
+        .then((result) => {
+          jobData.status = 'done';
+          jobData.progress = 100;
+          jobData.title = result.title || jobData.title;
+          jobData.log = 'Download complete. File saved to Downloads/yt-dlp/';
+          broadcast({ type: 'job', ...jobData });
+          scheduleSaveQueueState();
+        })
+        .catch((e) => {
+          jobData.status = 'error';
+          jobData.error = e.message;
+          jobData.log = 'Failed: ' + e.message;
+          broadcast({ type: 'job', ...jobData });
+          scheduleSaveQueueState();
+        });
+    };
+
+    if (redisOk) {
+      jobData.status = 'queued';
+      jobData.log = 'Queued in BullMQ worker...';
+      jobs.set(id, jobData);
+      broadcast({ type: 'job', ...jobData });
+      scheduleSaveQueueState();
+
+      try {
+        await Promise.race([
+          downloadQueue.add('vidara', { type: 'vidara', url: old.url }, { jobId: id }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ timeout')), 1500))
+        ]);
+        setTimeout(() => {
+          const current = jobs.get(id);
+          if (current && current.status === 'queued') {
+            console.warn(`⚠️ Watchdog: Retry Vidara job ${id} stayed queued >3s, starting direct fallback...`);
+            runDirectVidara();
+          }
+        }, 3000);
+      } catch (err) {
+        console.warn('⚠️ BullMQ add error on retry for Vidara:', err.message);
+        runDirectVidara();
+      }
+    } else {
+      jobs.set(id, jobData);
+      broadcast({ type: 'job', ...jobData });
+      scheduleSaveQueueState();
+      runDirectVidara();
     }
     return res.json({ ok: true, job: jobData });
   }
